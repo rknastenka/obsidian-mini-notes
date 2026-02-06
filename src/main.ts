@@ -34,6 +34,18 @@ export default class VisualDashboardPlugin extends Plugin {
 			}
 		});
 
+		// Add command to focus search
+		this.addCommand({
+			id: 'focus-mini-notes-search',
+			name: 'Focus search in mini notes',
+			callback: () => {
+				const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_VISUAL_DASHBOARD);
+				if (leaves.length > 0) {
+					(leaves[0]!.view as VisualDashboardView).focusSearch();
+				}
+			}
+		});
+
 		// Add command to create a new mini note
 		this.addCommand({
 			id: 'create-mini-note',

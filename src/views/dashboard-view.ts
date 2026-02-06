@@ -3,7 +3,8 @@ import type VisualDashboardPlugin from '../main';
 import { VIEW_TYPE_VISUAL_DASHBOARD } from '../types';
 import { extractTags, getPreviewText, stripMarkdown } from '../utils/markdown';
 import { formatDate } from '../utils/date';
-import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH, CARD_SIZE, MAX_CARD_HEIGHT } from '../constants';
+import { searchNote, highlightMatches, SearchResult } from '../utils/search';
+import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, DEBOUNCE_SEARCH_MS, MAX_PREVIEW_LENGTH, CARD_SIZE, MAX_CARD_HEIGHT } from '../constants';
 
 export class VisualDashboardView extends ItemView {
 	private miniNotesGrid!: HTMLElement;
@@ -18,6 +19,12 @@ export class VisualDashboardView extends ItemView {
 	private filterPinned: 'all' | 'pinned' | 'unpinned' = 'all';
 	private filterTag: string | null = null;
 	private allTags: string[] = [];
+
+	// Search state
+	private searchQuery = '';
+	private searchInputEl: HTMLInputElement | null = null;
+	private searchTimeoutId: number | null = null;
+	private currentSearchResults: Map<string, SearchResult> | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: VisualDashboardPlugin) {
 		super(leaf);
@@ -77,6 +84,68 @@ export class VisualDashboardView extends ItemView {
 
 		// Controls on right
 		const controls = header.createDiv({ cls: 'header-controls' });
+
+		// Search - collapsible input
+		const searchWrapper = controls.createDiv({ cls: 'search-wrapper' });
+		const searchToggle = searchWrapper.createDiv({ cls: 'filter-icon search-toggle-btn' });
+		setIcon(searchToggle, 'search');
+
+		const searchInput = searchWrapper.createEl('input', { cls: 'search-input' });
+		searchInput.type = 'text';
+		searchInput.placeholder = 'Search notes...';
+		searchInput.spellcheck = false;
+		this.searchInputEl = searchInput;
+
+		const searchClear = searchWrapper.createDiv({ cls: 'filter-icon search-clear-btn' });
+		setIcon(searchClear, 'x');
+
+		// Restore search state if re-opening
+		if (this.searchQuery) {
+			searchWrapper.addClass('expanded');
+			searchInput.value = this.searchQuery;
+			searchToggle.addClass('active');
+			searchClear.style.display = '';
+		} else {
+			searchClear.style.display = 'none';
+		}
+
+		searchToggle.addEventListener('click', () => {
+			const isExpanded = searchWrapper.hasClass('expanded');
+			if (isExpanded && !this.searchQuery) {
+				searchWrapper.removeClass('expanded');
+			} else {
+				searchWrapper.addClass('expanded');
+				searchInput.focus();
+			}
+		});
+
+		searchInput.addEventListener('input', () => {
+			this.searchQuery = searchInput.value;
+			searchToggle.toggleClass('active', this.searchQuery.length > 0);
+			searchClear.style.display = this.searchQuery.length > 0 ? '' : 'none';
+			this.debouncedSearch();
+		});
+
+		searchInput.addEventListener('keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Escape') {
+				searchInput.value = '';
+				this.searchQuery = '';
+				searchToggle.removeClass('active');
+				searchClear.style.display = 'none';
+				searchWrapper.removeClass('expanded');
+				void this.renderCards();
+			}
+		});
+
+		searchClear.addEventListener('click', (e: MouseEvent) => {
+			e.stopPropagation();
+			searchInput.value = '';
+			this.searchQuery = '';
+			searchToggle.removeClass('active');
+			searchClear.style.display = 'none';
+			searchWrapper.removeClass('expanded');
+			void this.renderCards();
+		});
 
 		// Tag filter - icon with dropdown
 		const tagWrapper = controls.createDiv({ cls: 'tag-filter-wrapper' });
@@ -205,6 +274,25 @@ export class VisualDashboardView extends ItemView {
 		}, DEBOUNCE_REFRESH_MS);
 	}
 
+	private debouncedSearch() {
+		if (this.searchTimeoutId !== null) {
+			window.clearTimeout(this.searchTimeoutId);
+		}
+
+		this.searchTimeoutId = window.setTimeout(() => {
+			void this.renderCards();
+			this.searchTimeoutId = null;
+		}, DEBOUNCE_SEARCH_MS);
+	}
+
+	public focusSearch(): void {
+		if (this.searchInputEl) {
+			const wrapper = this.searchInputEl.closest('.search-wrapper') as HTMLElement | null;
+			wrapper?.addClass('expanded');
+			this.searchInputEl.focus();
+		}
+	}
+
 	private applyThemeColor() {
 		const container = this.contentEl;
 		let themeColor: string;
@@ -280,6 +368,27 @@ export class VisualDashboardView extends ItemView {
 			});
 		}
 
+		// Apply search filter
+		if (this.searchQuery.trim().length > 0) {
+			const searchResults = new Map<string, SearchResult>();
+
+			for (const file of files) {
+				const content = fileContents.get(file.path) || '';
+				const strippedContent = stripMarkdown(content);
+				const tags = extractTags(content);
+				const result = searchNote(this.searchQuery, file.basename, strippedContent, tags);
+
+				if (result) {
+					searchResults.set(file.path, result);
+				}
+			}
+
+			files = files.filter(f => searchResults.has(f.path));
+			this.currentSearchResults = searchResults;
+		} else {
+			this.currentSearchResults = null;
+		}
+
 		// Limit after filtering
 		files = files.slice(0, this.plugin.data.maxNotes);
 
@@ -296,6 +405,17 @@ export class VisualDashboardView extends ItemView {
 
 		const pinnedFiles = files.filter(f => this.plugin.isPinned(f.path)).sort(sortByOrder);
 		const unpinnedFiles = files.filter(f => !this.plugin.isPinned(f.path)).sort(sortByOrder);
+
+		// Sort by relevance when search is active
+		if (this.currentSearchResults) {
+			const byRelevance = (a: TFile, b: TFile) => {
+				const scoreA = this.currentSearchResults!.get(a.path)?.score ?? 0;
+				const scoreB = this.currentSearchResults!.get(b.path)?.score ?? 0;
+				return scoreB - scoreA;
+			};
+			pinnedFiles.sort(byRelevance);
+			unpinnedFiles.sort(byRelevance);
+		}
 
 		// Store the combined order for drag-and-drop
 		this.currentFiles = [...pinnedFiles, ...unpinnedFiles];
@@ -522,6 +642,18 @@ export class VisualDashboardView extends ItemView {
 			}
 		}
 		
+		// Highlight search matches in title, preview, and tags
+		if (this.searchQuery && this.currentSearchResults?.has(file.path)) {
+			highlightMatches(title, this.searchQuery);
+			const previewEl = cardContent.querySelector('.card-preview') as HTMLElement | null;
+			if (previewEl) {
+				highlightMatches(previewEl, this.searchQuery);
+			}
+			tagsContainer.querySelectorAll('.card-tag').forEach(tagEl => {
+				highlightMatches(tagEl as HTMLElement, this.searchQuery);
+			});
+		}
+
 		// Date on right
 		const dateSpan = cardFooter.createSpan({ cls: 'card-date' });
 		dateSpan.createSpan({ text: formatDate(file.stat.mtime) });
@@ -618,7 +750,9 @@ export class VisualDashboardView extends ItemView {
 	}
 
 async onClose() {
-		
+	if (this.searchTimeoutId !== null) {
+			window.clearTimeout(this.searchTimeoutId);
+		}
 		// Event cleanup handled automatically by registerEvent
 		this.contentEl.empty();
 	}

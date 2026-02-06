@@ -77,6 +77,8 @@
     display: flex;
     align-items: center;
     gap: 4px;
+    flex-shrink: 0;
+    flex-wrap: nowrap;
 }
 
 /* Tag Filter Wrapper */
@@ -181,6 +183,60 @@
     width: 15px;
     height: 15px;
     pointer-events: none;
+}
+
+/* ============================================
+   Search
+   ============================================ */
+
+.search-wrapper {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+}
+
+.search-input {
+    width: 0;
+    opacity: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-normal);
+    font-size: 13px;
+    outline: none;
+    transition: width 0.2s ease, opacity 0.2s ease, padding 0.2s ease;
+}
+
+.search-wrapper.expanded .search-input {
+    width: 160px;
+    opacity: 1;
+    padding: 4px 8px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    background: var(--background-primary);
+}
+
+.search-wrapper.expanded .search-input:focus {
+    border-color: var(--masonry-theme-color, var(--interactive-accent));
+}
+
+/* Clear button: inherits .filter-icon sizing (28x28), hidden/shown via JS style.display */
+.search-clear-btn svg {
+    width: 12px;
+    height: 12px;
+}
+
+.search-highlight {
+    background-color: var(--text-highlight-bg);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
+@media (max-width: 499px) {
+    .search-wrapper.expanded .search-input {
+        width: 100px;
+    }
 }
 
 /* ============================================
