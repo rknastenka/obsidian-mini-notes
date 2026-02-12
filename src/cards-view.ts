@@ -393,18 +393,21 @@ export class VisualDashboardView extends ItemView {
 			.sort((a: TFile, b: TFile) => b.stat.mtime - a.stat.mtime)
 			.slice(0, this.plugin.data.maxNotes * FILE_FETCH_MULTIPLIER); // Get more initially for filtering
 
-		// Pre-load content for tag filtering with error handling
+		// Pre-load content and tags for filtering with error handling
 		const fileContents = new Map<string, string>();
+		const fileTags = new Map<string, string[]>();
 		const tagSet = new Set<string>();
 		for (const file of files) {
 			try {
 				const content = await this.app.vault.cachedRead(file);
 				fileContents.set(file.path, content);
 				const tags = extractTags(content);
+				fileTags.set(file.path, tags);
 				tags.forEach(tag => tagSet.add(tag));
 			} catch (error) {
 				console.warn(`Failed to read file ${file.path}:`, error);
 				fileContents.set(file.path, '');
+				fileTags.set(file.path, []);
 			}
 		}
 
@@ -435,7 +438,8 @@ export class VisualDashboardView extends ItemView {
 			fileContents,
 			searchState,
 			(path) => this.plugin.isPinned(path),
-			(path) => this.plugin.data.noteColors[path]
+			(path) => this.plugin.data.noteColors[path],
+			fileTags
 		);
 
 		// Limit after filtering
@@ -453,7 +457,12 @@ export class VisualDashboardView extends ItemView {
 		};
 
 		const pinnedFiles = files.filter(f => this.plugin.isPinned(f.path)).sort(sortByOrder);
-		const unpinnedFiles = files.filter(f => !this.plugin.isPinned(f.path)).sort(sortByOrder);
+		// When searching with text, preserve relevance order for unpinned files
+		const hasTextSearch = isSimpleTextSearch(this.filterSearch) || (this.filterSearch && getCleanQuery(this.filterSearch).length > 0);
+		const unpinnedFiles = files.filter(f => !this.plugin.isPinned(f.path));
+		if (!hasTextSearch) {
+			unpinnedFiles.sort(sortByOrder);
+		}
 
 		// Store the combined order for drag-and-drop
 		this.currentFiles = [...pinnedFiles, ...unpinnedFiles];

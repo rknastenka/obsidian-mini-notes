@@ -16,6 +16,95 @@ export interface SearchSuggestion {
 	display: string;
 }
 
+interface FuzzyResult {
+	match: boolean;
+	score: number;
+}
+
+// Pre-compiled regex patterns for type: operator (avoids re-creation per file)
+const TYPE_PATTERNS: Record<string, RegExp> = {
+	image: /!\[.*?\]\([^)]*\.(png|jpg|jpeg|gif|bmp|svg|webp)[^)]*\)|!\[\[[^\]]*\.(png|jpg|jpeg|gif|bmp|svg|webp)[^\]]*\]\]/i,
+	pdf: /!?\[.*?\]\([^)]*\.pdf[^)]*\)|!?\[\[[^\]]*\.pdf[^\]]*\]\]/i,
+	link: new RegExp(
+		'(?<!!)\\[.*?\\]\\((?![^)]*\\.(png|jpg|jpeg|gif|bmp|svg|webp|pdf)\\b)[^)]+\\)|' +
+		'(?<!!)\\[\\[(?![^\\]]*\\.(png|jpg|jpeg|gif|bmp|svg|webp|pdf)\\b)[^\\]]+\\]\\]',
+		'i'
+	),
+	list: /^\s*[-*+]\s|^\s*\d+\.\s/m,
+	code: /```[\s\S]*?```|`[^`|]+`/,
+	table: /\|[^\n]*\|\n\|[\s:|-]+\|/
+};
+
+const COLOR_MAP: Record<string, string> = {
+	'pink': 'pastel-pink',
+	'peach': 'pastel-peach',
+	'yellow': 'pastel-yellow',
+	'green': 'pastel-green',
+	'blue': 'pastel-blue',
+	'purple': 'pastel-purple',
+	'magenta': 'pastel-magenta',
+	'gray': 'pastel-gray'
+};
+
+/**
+ * Fuzzy match: checks if all characters of query appear in order within target.
+ * Returns a score based on match quality.
+ */
+export function fuzzyMatch(query: string, target: string): FuzzyResult {
+	if (!query || !target) return { match: false, score: 0 };
+
+	const lowerQuery = query.toLowerCase();
+	const lowerTarget = target.toLowerCase();
+
+	// Exact substring match gets highest score
+	if (lowerTarget.includes(lowerQuery)) {
+		// Bonus if match is at the start
+		const idx = lowerTarget.indexOf(lowerQuery);
+		const startBonus = idx === 0 ? 20 : 0;
+		// Bonus for shorter targets (more relevant match)
+		const lengthBonus = Math.max(0, 10 - Math.floor(target.length / 20));
+		return { match: true, score: 100 + startBonus + lengthBonus };
+	}
+
+	// Fuzzy: all query chars must appear in order
+	let queryIdx = 0;
+	let score = 0;
+	let consecutive = 0;
+	let prevMatchIdx = -2;
+
+	for (let i = 0; i < lowerTarget.length && queryIdx < lowerQuery.length; i++) {
+		if (lowerTarget[i] === lowerQuery[queryIdx]) {
+			queryIdx++;
+			score += 1;
+
+			// Bonus for consecutive character matches
+			if (i === prevMatchIdx + 1) {
+				consecutive++;
+				score += consecutive * 2;
+			} else {
+				consecutive = 0;
+			}
+
+			// Bonus for matching at word boundaries (after space, -, _, /)
+			const prevChar = i > 0 ? lowerTarget.charAt(i - 1) : '';
+			if (i === 0 || /[\s\-_/]/.test(prevChar)) {
+				score += 5;
+			}
+
+			prevMatchIdx = i;
+		}
+	}
+
+	if (queryIdx === lowerQuery.length) {
+		// Penalize if match is very spread out
+		const spread = prevMatchIdx - (prevMatchIdx - queryIdx + 1);
+		const spreadPenalty = Math.max(0, spread - lowerQuery.length) * 0.5;
+		return { match: true, score: Math.max(1, score - spreadPenalty) };
+	}
+
+	return { match: false, score: 0 };
+}
+
 export function parseSearchOperators(query: string): Omit<SearchState, 'query'> {
 	const filterOperators = new Map<string, string>();
 	const filterColors: string[] = [];
@@ -156,6 +245,7 @@ export function highlightSearchTerms(element: HTMLElement, searchTerm: string): 
 	if (!searchTerm || searchTerm.trim().length === 0) return;
 	
 	const term = searchTerm.trim();
+	const lowerTerm = term.toLowerCase();
 	const walker = document.createTreeWalker(
 		element,
 		NodeFilter.SHOW_TEXT,
@@ -170,44 +260,52 @@ export function highlightSearchTerms(element: HTMLElement, searchTerm: string): 
 		textNodes.push(node as Text);
 	}
 	
-	// Process each text node
+	// Process each text node — highlight ALL occurrences
 	textNodes.forEach(textNode => {
 		const text = textNode.textContent || '';
 		const lowerText = text.toLowerCase();
-		const lowerTerm = term.toLowerCase();
-		const index = lowerText.indexOf(lowerTerm);
-		
-		if (index !== -1) {
-			const parent = textNode.parentNode;
-			if (!parent) return;
-			
-			// Skip if already highlighted or in certain elements
-			if (parent.nodeName === 'MARK' || parent.nodeName === 'CODE' || parent.nodeName === 'PRE') {
-				return;
+		const firstIndex = lowerText.indexOf(lowerTerm);
+
+		if (firstIndex === -1) return;
+
+		const parent = textNode.parentNode;
+		if (!parent) return;
+
+		// Skip if already highlighted or in certain elements
+		if (parent.nodeName === 'MARK' || parent.nodeName === 'CODE' || parent.nodeName === 'PRE') {
+			return;
+		}
+
+		// Build fragment with all matches highlighted
+		const fragment = document.createDocumentFragment();
+		let lastEnd = 0;
+		let searchFrom = 0;
+
+		while (searchFrom < lowerText.length) {
+			const idx = lowerText.indexOf(lowerTerm, searchFrom);
+			if (idx === -1) break;
+
+			// Add text before match
+			if (idx > lastEnd) {
+				fragment.appendChild(document.createTextNode(text.substring(lastEnd, idx)));
 			}
-			
-			// Create highlighted version
-			const before = text.substring(0, index);
-			const match = text.substring(index, index + term.length);
-			const after = text.substring(index + term.length);
-			
-			const fragment = document.createDocumentFragment();
-			
-			if (before) fragment.appendChild(document.createTextNode(before));
-			
+
+			// Add highlighted match
 			const mark = document.createElement('mark');
 			mark.className = 'search-highlight';
-			mark.textContent = match;
+			mark.textContent = text.substring(idx, idx + term.length);
 			fragment.appendChild(mark);
-			
-			if (after) {
-				// Recursively highlight remaining text
-				const afterNode = document.createTextNode(after);
-				fragment.appendChild(afterNode);
-			}
-			
-			parent.replaceChild(fragment, textNode);
+
+			lastEnd = idx + term.length;
+			searchFrom = lastEnd;
 		}
+
+		// Add remaining text after last match
+		if (lastEnd < text.length) {
+			fragment.appendChild(document.createTextNode(text.substring(lastEnd)));
+		}
+
+		parent.replaceChild(fragment, textNode);
 	});
 }
 
@@ -216,7 +314,8 @@ export function filterFiles(
 	fileContents: Map<string, string>,
 	searchState: SearchState,
 	isPinned: (path: string) => boolean,
-	getNoteColor: (path: string) => string | undefined
+	getNoteColor: (path: string) => string | undefined,
+	fileTags?: Map<string, string[]>
 ): TFile[] {
 	let filtered = [...files];
 
@@ -230,8 +329,7 @@ export function filterFiles(
 	// Apply tag filter
 	if (searchState.filterTag) {
 		filtered = filtered.filter(f => {
-			const content = fileContents.get(f.path) || '';
-			const tags = extractTags(content);
+			const tags = fileTags?.get(f.path) ?? extractTags(fileContents.get(f.path) || '');
 			return tags.includes(searchState.filterTag!);
 		});
 	}
@@ -245,19 +343,44 @@ export function filterFiles(
 		});
 	}
 
-	// Apply search filter with operators
+	// Apply search filter with operators and fuzzy scoring
+	const cleanQuery = searchState.query ? getCleanQuery(searchState.query) : '';
+	const hasTextQuery = cleanQuery.length > 0;
+	const hasOperators = searchState.query && searchState.query !== cleanQuery;
+
 	if (searchState.query) {
-		const cleanQuery = getCleanQuery(searchState.query);
+		// Score map for relevance ranking
+		const scoreMap = new Map<string, number>();
 
 		filtered = filtered.filter(f => {
 			const content = fileContents.get(f.path) || '';
-			const tags = extractTags(content);
+			const contentLower = content.toLowerCase();
+			const tags = fileTags?.get(f.path) ?? extractTags(content);
 
-			// Check text search
+			// Check text search with fuzzy matching
 			let matchesText = true;
-			if (cleanQuery) {
-				matchesText = f.basename.toLowerCase().includes(cleanQuery) ||
-					content.toLowerCase().includes(cleanQuery);
+			let textScore = 0;
+
+			if (hasTextQuery) {
+				const titleResult = fuzzyMatch(cleanQuery, f.basename);
+				const contentExact = contentLower.includes(cleanQuery);
+
+				if (titleResult.match) {
+					// Title match: base 50 + fuzzy score
+					textScore = 50 + titleResult.score;
+				} else if (contentExact) {
+					// Content exact substring match
+					textScore = 30;
+				} else {
+					// Try fuzzy on first 2000 chars of content for performance
+					const contentSnippet = content.substring(0, 2000);
+					const contentResult = fuzzyMatch(cleanQuery, contentSnippet);
+					if (contentResult.match) {
+						textScore = 10 + contentResult.score * 0.3;
+					} else {
+						matchesText = false;
+					}
+				}
 			}
 
 			// Check has: operators
@@ -267,44 +390,14 @@ export function filterFiles(
 				if (hasValue === 'content' && content.trim().length === 0) return false;
 			}
 
-			// Check type: operators
+			// Check type: operators using pre-compiled patterns
 			if (searchState.filterOperators.has('type')) {
 				const typeValue = searchState.filterOperators.get('type');
-				const trimmedContent = content.trim();
 
-				switch (typeValue) {
-					case 'empty':
-						if (trimmedContent.length > 0) return false;
-						break;
-					case 'image':
-						// Match markdown images with image extensions
-						// Supports: ![](image.jpg), ![[image.png]], and common image formats
-						if (!content.match(/!\[.*?\]\([^)]*\.(png|jpg|jpeg|gif|bmp|svg|webp)[^)]*\)|!\[\[[^\]]*\.(png|jpg|jpeg|gif|bmp|svg|webp)[^\]]*\]\]/i)) return false;
-						break;
-					case 'pdf':
-						// Match markdown embeds with PDF extensions
-						// Supports: ![](document.pdf), ![[document.pdf]], [](document.pdf), [[document.pdf]]
-						if (!content.match(/!?\[.*?\]\([^)]*\.pdf[^)]*\)|!?\[\[[^\]]*\.pdf[^\]]*\]\]/i)) return false;
-						break;
-					case 'link':
-						// Match links to pages, excluding images and PDFs
-						// Excludes: links with ! prefix (embeds) and links to image/PDF files
-						const linkPattern = new RegExp(
-							'(?<!!)\\[.*?\\]\\((?![^)]*\\.(png|jpg|jpeg|gif|bmp|svg|webp|pdf)\\b)[^)]+\\)|' +
-							'(?<!!)\\[\\[(?![^\\]]*\\.(png|jpg|jpeg|gif|bmp|svg|webp|pdf)\\b)[^\\]]+\\]\\]',
-							'i'
-						);
-						if (!content.match(linkPattern)) return false;
-						break;
-					case 'list':
-						if (!content.match(/^\s*[-*+]\s|^\s*\d+\.\s/m)) return false;
-						break;
-					case 'code':
-						if (!content.match(/```[\s\S]*?```|`[^`|]+`/)) return false;
-						break;
-					case 'table':
-						if (!content.match(/\|[^\n]*\|\n\|[\s:|-]+\|/)) return false;
-						break;
+				if (typeValue === 'empty') {
+					if (content.trim().length > 0) return false;
+				} else if (typeValue && TYPE_PATTERNS[typeValue]) {
+					if (!TYPE_PATTERNS[typeValue].test(content)) return false;
 				}
 			}
 
@@ -314,17 +407,7 @@ export function filterFiles(
 				if (!savedColor) return false;
 
 				const colorMatch = searchState.filterColors.some(filterColor => {
-					const colorMap: Record<string, string> = {
-						'pink': 'pastel-pink',
-						'peach': 'pastel-peach',
-						'yellow': 'pastel-yellow',
-						'green': 'pastel-green',
-						'blue': 'pastel-blue',
-						'purple': 'pastel-purple',
-						'magenta': 'pastel-magenta',
-						'gray': 'pastel-gray'
-					};
-					const expectedColor = colorMap[filterColor];
+					const expectedColor = COLOR_MAP[filterColor];
 					if (!expectedColor) return false;
 					return savedColor.includes(expectedColor);
 				});
@@ -332,8 +415,21 @@ export function filterFiles(
 				if (!colorMatch) return false;
 			}
 
+			if (matchesText) {
+				scoreMap.set(f.path, textScore);
+			}
+
 			return matchesText;
 		});
+
+		// Sort by relevance score when there's a text query
+		if (hasTextQuery) {
+			filtered.sort((a, b) => {
+				const scoreA = scoreMap.get(a.path) || 0;
+				const scoreB = scoreMap.get(b.path) || 0;
+				return scoreB - scoreA;
+			});
+		}
 	}
 
 	return filtered;
