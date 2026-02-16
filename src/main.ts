@@ -9,7 +9,6 @@ export default class VisualDashboardPlugin extends Plugin {
 	async onload() {
 		try {
 			await this.loadPluginData();
-			await this.ensureMiniNotesFolder();
 
 			// Register the custom icon
 			addIcon('dashboard-grid', DASHBOARD_ICON);
@@ -146,28 +145,6 @@ export default class VisualDashboardPlugin extends Plugin {
 			}
 		} catch (error) {
 			console.error('Error handling file rename:', error);
-		}
-	}
-
-	async ensureMiniNotesFolder() {
-		try {
-			const folderPath = normalizePath('Mini Notes');
-			const folder = this.app.vault.getAbstractFileByPath(folderPath);
-			
-			if (!folder) {
-				try {
-					await this.app.vault.createFolder(folderPath);
-					new Notice('Mini notes folder created');
-				} catch (createError) {
-					// Ignore if folder already exists (race condition)
-					const errorMessage = createError instanceof Error ? createError.message : String(createError);
-					if (!errorMessage.includes('already exists')) {
-						throw createError;
-					}
-				}
-			}
-		} catch (error) {
-			console.error('Error creating Mini Notes folder:', error);
 		}
 	}
 

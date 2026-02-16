@@ -5,7 +5,8 @@ export function extractTags(content: string): string[] {
 		.replace(/```[\s\S]*?```/g, '') // Remove code blocks
 		.replace(/`[^`]*`/g, ''); // Remove inline code
 	
-	const tagRegex = /(?:^|\s)#([a-zA-Z][a-zA-Z0-9_-]*)/g;
+	// Updated regex to support Unicode characters including emoticons/emoji
+	const tagRegex = /(?:^|\s)#([\p{L}\p{N}\p{Emoji}_-][\p{L}\p{N}\p{Emoji}_-]*)/gu;
 	const tags: string[] = [];
 	let match;
 
@@ -35,7 +36,7 @@ export function stripMarkdown(content: string): string {
 		.replace(/^>\s+/gm, '') // Blockquotes
 		.replace(/^[-*+]\s+/gm, '') // List items
 		.replace(/^\d+\.\s+/gm, '') // Numbered lists
-		.replace(/(?:^|\s)#[a-zA-Z][a-zA-Z0-9_-]*/g, '') // Remove tags
+		.replace(/(?:^|\s)#[\p{L}\p{N}\p{Emoji}_-]+/gu, '') // Remove tags (supports Unicode/emoji)
 		.trim();
 }
 

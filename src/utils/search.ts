@@ -36,7 +36,7 @@ const TYPE_PATTERNS: Record<string, RegExp> = {
 };
 
 const COLOR_MAP: Record<string, string> = {
-	'pink': 'pastel-pink',
+	'pink': 'pastel-magenta',
 	'peach': 'pastel-peach',
 	'yellow': 'pastel-yellow',
 	'green': 'pastel-green',
@@ -144,7 +144,7 @@ export function parseSearchOperators(query: string): Omit<SearchState, 'query'> 
 	return { filterTag, filterPinned, filterColors, filterFolder, filterOperators };
 }
 
-export function getSearchSuggestions(query: string, allTags: string[], allFolders: string[] = []): SearchSuggestion[] {
+export function getSearchSuggestions(query: string, allTags: string[], allFolders: string[] = [], noteColors: Record<string, string> = {}): SearchSuggestion[] {
 	const suggestions: SearchSuggestion[] = [];
 	const lastWord = query.split(' ').pop() || '';
 
@@ -185,13 +185,64 @@ export function getSearchSuggestions(query: string, allTags: string[], allFolder
 
 	// Show color suggestions when typing color:
 	if (lastWord.startsWith('color:')) {
-		const colors = ['pink', 'peach', 'yellow', 'green', 'blue', 'purple', 'magenta', 'gray'];
+		// Extract unique colors from noteColors
+		const colorMap: Record<string, string> = {
+			'pastel-peach': 'Peach',
+			'pastel-yellow': 'Yellow',
+			'pastel-green': 'Green',
+			'pastel-blue': 'Blue',
+			'pastel-purple': 'Purple',
+			'pastel-magenta': 'Pink'
+		};
+		
+		// Map display names to search keys
+		const displayToSearchKey: Record<string, string> = {
+			'Peach': 'peach',
+			'Yellow': 'yellow',
+			'Green': 'green',
+			'Blue': 'blue',
+			'Purple': 'purple',
+			'Pink': 'pink'
+		};
+		
+		const usedColors = new Set<string>();
+		Object.values(noteColors).forEach(colorValue => {
+			for (const [key, displayName] of Object.entries(colorMap)) {
+				if (colorValue.includes(key)) {
+					usedColors.add(key);
+				}
+			}
+		});
+		
 		const colorPrefix = lastWord.substring(6).toLowerCase();
-		const matchingColors = colors.filter(c => c.startsWith(colorPrefix));
-
-		if (matchingColors.length > 0) {
-			matchingColors.forEach(color => {
-				suggestions.push({ type: 'color', value: `color:${color}`, display: `color:${color}` });
+		const availableColors: Array<{key: string, display: string, value: string}> = [];
+		
+		// Add used colors
+		for (const [key, displayName] of Object.entries(colorMap)) {
+			if (usedColors.has(key)) {
+				const searchKey = displayToSearchKey[displayName] || key.replace('pastel-', '');
+				if (displayName.toLowerCase().startsWith(colorPrefix) || searchKey.startsWith(colorPrefix)) {
+					availableColors.push({
+						key: searchKey,
+						display: displayName,
+						value: `color:${searchKey}`
+					});
+				}
+			}
+		}
+		
+		// Add "No color" option if it matches
+		if ('no color'.includes(colorPrefix) || 'gray'.startsWith(colorPrefix) || colorPrefix === '') {
+			availableColors.push({
+				key: 'gray',
+				display: 'No color',
+				value: 'color:gray'
+			});
+		}
+		
+		if (availableColors.length > 0) {
+			availableColors.forEach(color => {
+				suggestions.push({ type: 'color', value: color.value, display: color.display });
 			});
 			return suggestions;
 		}
@@ -343,6 +394,28 @@ export function filterFiles(
 		});
 	}
 
+	// Apply color filter
+	if (searchState.filterColors.length > 0) {
+		filtered = filtered.filter(f => {
+			const savedColor = getNoteColor(f.path);
+
+			const colorMatch = searchState.filterColors.some(filterColor => {
+				// Special case: gray means no color
+				if (filterColor === 'gray') {
+					return !savedColor;
+				}
+
+				if (!savedColor) return false;
+
+				const expectedColor = COLOR_MAP[filterColor];
+				if (!expectedColor) return false;
+				return savedColor.includes(expectedColor);
+			});
+
+			return colorMatch;
+		});
+	}
+
 	// Apply search filter with operators and fuzzy scoring
 	const cleanQuery = searchState.query ? getCleanQuery(searchState.query) : '';
 	const hasTextQuery = cleanQuery.length > 0;
@@ -399,20 +472,6 @@ export function filterFiles(
 				} else if (typeValue && TYPE_PATTERNS[typeValue]) {
 					if (!TYPE_PATTERNS[typeValue].test(content)) return false;
 				}
-			}
-
-			// Check color filters
-			if (searchState.filterColors.length > 0) {
-				const savedColor = getNoteColor(f.path);
-				if (!savedColor) return false;
-
-				const colorMatch = searchState.filterColors.some(filterColor => {
-					const expectedColor = COLOR_MAP[filterColor];
-					if (!expectedColor) return false;
-					return savedColor.includes(expectedColor);
-				});
-
-				if (!colorMatch) return false;
 			}
 
 			if (matchesText) {

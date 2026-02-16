@@ -10,6 +10,10 @@ export class VisualDashboardView extends ItemView {
 	private miniNotesGrid!: HTMLElement;
 	private plugin: VisualDashboardPlugin;
 	private draggedCard: HTMLElement | null = null;
+	private dragOverTargetCard: HTMLElement | null = null;
+	private pendingDragTargetCard: HTMLElement | null = null;
+	private pendingDragClientY: number | null = null;
+	private dragFrameId: number | null = null;
 	private currentFiles: TFile[] = [];
 	private settingsChangedHandler: () => void;
 	private refreshTimeoutId: number | null = null;
@@ -28,6 +32,7 @@ export class VisualDashboardView extends ItemView {
 	private selectedSuggestionIndex: number = -1;
 	private currentSuggestions: Array<{ type: string; value: string; display: string }> = [];
 	private currentSuggestionQuery: string = '';
+	private activeColorDropdown: HTMLElement | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: VisualDashboardPlugin) {
 		super(leaf);
@@ -267,7 +272,7 @@ export class VisualDashboardView extends ItemView {
 		this.selectedSuggestionIndex = -1;
 		this.currentSuggestionQuery = query;
 		
-		const suggestions = getSearchSuggestions(query, this.allTags, this.allFolders);
+		const suggestions = getSearchSuggestions(query, this.allTags, this.allFolders, this.plugin.data.noteColors);
 		this.currentSuggestions = suggestions;
 		
 		if (suggestions.length > 0) {
@@ -314,10 +319,13 @@ export class VisualDashboardView extends ItemView {
 			if (!isIncompleteOperator) {
 				this.updateSearchState(newQuery);
 				this.debouncedRefresh();
+				this.searchSuggestionsEl?.empty();
+				this.searchSuggestionsEl?.removeClass('show');
+				this.selectedSuggestionIndex = -1;
+			} else {
+				// For incomplete operators, show the next level of suggestions
+				this.updateSearchSuggestions(newQuery);
 			}
-			this.searchSuggestionsEl?.empty();
-			this.searchSuggestionsEl?.removeClass('show');
-			this.selectedSuggestionIndex = -1;
 			searchInput.focus();
 		}
 	}
@@ -348,6 +356,16 @@ export class VisualDashboardView extends ItemView {
 		const filterChipsContainer = this.contentEl.querySelector('.filter-chips-container') as HTMLElement;
 		if (filterChipsContainer) {
 			filterChipsContainer.style.display = 'none';
+		}
+	}
+
+	private closeAllColorDropdowns(except: HTMLElement | null = null) {
+		if (this.activeColorDropdown && this.activeColorDropdown !== except) {
+			this.activeColorDropdown.removeClass('show');
+		}
+
+		if (!except) {
+			this.activeColorDropdown = null;
 		}
 	}
 
@@ -619,13 +637,12 @@ export class VisualDashboardView extends ItemView {
 		
 		// Create color palette dropdown using CSS variables
 		const pastelColors = [
-			'var(--pastel-pink)',     // Pink
 			'var(--pastel-peach)',    // Peach
 			'var(--pastel-yellow)',   // Yellow
 			'var(--pastel-green)',    // Green
 			'var(--pastel-blue)',     // Blue
 			'var(--pastel-purple)',   // Purple
-			'var(--pastel-magenta)',  // Magenta
+			'var(--pastel-magenta)',  // Pink
 			'var(--pastel-gray)'      // Gray (remove color)
 		];
 		
@@ -660,7 +677,7 @@ export class VisualDashboardView extends ItemView {
 					}
 					
 					await this.plugin.savePluginData();
-					colorDropdown.removeClass('show');
+					this.closeAllColorDropdowns();
 				})();
 			});
 		});
@@ -668,12 +685,17 @@ export class VisualDashboardView extends ItemView {
 		// Toggle dropdown on click
 		colorBtn.addEventListener('click', (e: MouseEvent) => {
 			e.stopPropagation();
-			colorDropdown.toggleClass('show', !colorDropdown.hasClass('show'));
+			const shouldOpen = !colorDropdown.hasClass('show');
+			this.closeAllColorDropdowns(colorDropdown);
+			colorDropdown.toggleClass('show', shouldOpen);
+			this.activeColorDropdown = shouldOpen ? colorDropdown : null;
 		});
 		
 		// Close dropdown when clicking outside
 		card.addEventListener('click', () => {
-			colorDropdown.removeClass('show');
+			if (this.activeColorDropdown === colorDropdown) {
+				this.closeAllColorDropdowns();
+			}
 		});
 
 		// Card header with file info
@@ -745,8 +767,6 @@ export class VisualDashboardView extends ItemView {
 		card.addEventListener('dragstart', (e: DragEvent) => this.handleDragStart(e, card));
 		card.addEventListener('dragend', (e: DragEvent) => this.handleDragEnd(e, card));
 		card.addEventListener('dragover', (e: DragEvent) => this.handleDragOver(e, card));
-		card.addEventListener('dragenter', (e: DragEvent) => this.handleDragEnter(e, card));
-		card.addEventListener('dragleave', (e: DragEvent) => this.handleDragLeave(e, card));
 		card.addEventListener('drop', (e: DragEvent) => void this.handleDrop(e, card));
 		} catch (error) {
 			console.warn(`Skipping card for ${file.path} due to error:`, error);
@@ -760,6 +780,9 @@ export class VisualDashboardView extends ItemView {
 	// Drag and Drop Handlers
 	handleDragStart(e: DragEvent, card: HTMLElement) {
 		this.draggedCard = card;
+		this.dragOverTargetCard = null;
+		this.pendingDragTargetCard = null;
+		this.pendingDragClientY = null;
 		card.classList.add('dragging');
 
 		if (e.dataTransfer) {
@@ -769,13 +792,16 @@ export class VisualDashboardView extends ItemView {
 	}
 
 	handleDragEnd(e: DragEvent, card: HTMLElement) {
+		void e;
 		card.classList.remove('dragging');
+		if (this.dragFrameId !== null) {
+			window.cancelAnimationFrame(this.dragFrameId);
+			this.dragFrameId = null;
+		}
+		this.pendingDragTargetCard = null;
+		this.pendingDragClientY = null;
+		this.setDragOverTarget(null);
 		this.draggedCard = null;
-
-		// Remove all drag-over classes
-		this.miniNotesGrid.querySelectorAll('.drag-over').forEach(el => {
-			el.classList.remove('drag-over');
-		});
 	}
 
 	handleDragOver(e: DragEvent, card: HTMLElement) {
@@ -783,45 +809,115 @@ export class VisualDashboardView extends ItemView {
 		if (e.dataTransfer) {
 			e.dataTransfer.dropEffect = 'move';
 		}
-	}
 
-	handleDragEnter(e: DragEvent, card: HTMLElement) {
-		e.preventDefault();
-		if (card !== this.draggedCard) {
-			card.classList.add('drag-over');
+		if (!this.draggedCard || card === this.draggedCard) return;
+
+		this.pendingDragTargetCard = card;
+		this.pendingDragClientY = e.clientY;
+
+		if (this.dragFrameId === null) {
+			this.dragFrameId = window.requestAnimationFrame(() => {
+				this.dragFrameId = null;
+				this.applyPendingDragReorder();
+			});
 		}
 	}
 
-	handleDragLeave(e: DragEvent, card: HTMLElement) {
-		card.classList.remove('drag-over');
-	}
-
-	handleDrop(e: DragEvent, targetCard: HTMLElement) {
+	async handleDrop(e: DragEvent, targetCard: HTMLElement) {
 		e.preventDefault();
-		targetCard.classList.remove('drag-over');
 
 		if (!this.draggedCard || this.draggedCard === targetCard) return;
 
+		if (this.dragFrameId !== null) {
+			window.cancelAnimationFrame(this.dragFrameId);
+			this.dragFrameId = null;
+		}
+
+		this.pendingDragTargetCard = targetCard;
+		this.pendingDragClientY = e.clientY;
+		this.applyPendingDragReorder();
+		this.setDragOverTarget(null);
+
 		const draggedPath = this.draggedCard.getAttribute('data-path');
+		if (!draggedPath) return;
+
+		const currentOrder = this.getCurrentCardOrder();
+		if (currentOrder.length === 0) return;
+
+		const previousOrder = this.currentFiles.map(file => file.path);
+		if (currentOrder.length === previousOrder.length && currentOrder.every((path, index) => path === previousOrder[index])) {
+			return;
+		}
+
+		const draggedWasPinned = this.plugin.isPinned(draggedPath);
 		const targetPath = targetCard.getAttribute('data-path');
+		const targetIsPinned = targetPath ? this.plugin.isPinned(targetPath) : draggedWasPinned;
 
-		if (!draggedPath || !targetPath) return;
+		await this.plugin.updateOrder(currentOrder);
+		this.syncCurrentFilesFromOrder(currentOrder);
 
-		// Get current order
-		const currentOrder = this.currentFiles.map(f => f.path);
+		if (draggedWasPinned !== targetIsPinned) {
+			await this.renderCards();
+		}
+	}
 
-		// Find indices
-		const draggedIndex = currentOrder.indexOf(draggedPath);
-		const targetIndex = currentOrder.indexOf(targetPath);
+	private setDragOverTarget(card: HTMLElement | null) {
+		if (this.dragOverTargetCard === card) return;
 
-		if (draggedIndex === -1 || targetIndex === -1) return;
+		if (this.dragOverTargetCard) {
+			this.dragOverTargetCard.classList.remove('drag-over');
+		}
 
-		// Reorder
-		currentOrder.splice(draggedIndex, 1);
-		currentOrder.splice(targetIndex, 0, draggedPath);
+		this.dragOverTargetCard = card;
 
-		// Save new order and re-render
-		void this.plugin.updateOrder(currentOrder).then(() => this.renderCards());
+		if (this.dragOverTargetCard) {
+			this.dragOverTargetCard.classList.add('drag-over');
+		}
+	}
+
+	private applyPendingDragReorder() {
+		const draggedCard = this.draggedCard;
+		const targetCard = this.pendingDragTargetCard;
+		const clientY = this.pendingDragClientY;
+
+		if (!draggedCard || !targetCard || draggedCard === targetCard || clientY === null) {
+			return;
+		}
+
+		this.setDragOverTarget(targetCard);
+
+		const targetRect = targetCard.getBoundingClientRect();
+		const insertBefore = clientY < targetRect.top + targetRect.height / 2;
+		const targetParent = targetCard.parentElement;
+
+		if (!targetParent) {
+			return;
+		}
+
+		if (insertBefore) {
+			if (targetCard.previousElementSibling !== draggedCard) {
+				targetParent.insertBefore(draggedCard, targetCard);
+			}
+		} else {
+			const nextSibling = targetCard.nextElementSibling;
+			if (nextSibling !== draggedCard) {
+				targetParent.insertBefore(draggedCard, nextSibling);
+			}
+		}
+	}
+
+	private getCurrentCardOrder(): string[] {
+		const cards = Array.from(this.miniNotesGrid.querySelectorAll('.dashboard-card[data-path]'));
+		return cards
+			.map(card => card.getAttribute('data-path'))
+			.filter((path): path is string => path !== null && path.length > 0);
+	}
+
+	private syncCurrentFilesFromOrder(order: string[]) {
+		const byPath = new Map(this.currentFiles.map(file => [file.path, file]));
+		this.currentFiles = order
+			.map(path => byPath.get(path))
+			.filter((file): file is TFile => file !== undefined);
 	}
 
 async onClose() {
