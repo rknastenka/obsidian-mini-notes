@@ -1,10 +1,10 @@
 import { ItemView, TFile, WorkspaceLeaf, setIcon, MarkdownRenderer } from 'obsidian';
 import type VisualDashboardPlugin from './main';
 import { VIEW_TYPE_VISUAL_DASHBOARD } from './utils/types';
-import { extractTags, getPreviewText, stripMarkdown } from './utils/markdown';
+import { extractTags, getPreviewText } from './utils/markdown';
 import { formatDate } from './utils/date';
 import { parseSearchOperators, getSearchSuggestions, filterFiles, isSimpleTextSearch, highlightSearchTerms, getCleanQuery, type SearchState } from './utils/search';
-import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH, CARD_SIZE, MAX_CARD_HEIGHT, PREVIEW_LENGTH_CONFIG } from './utils/constants';
+import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, PREVIEW_LENGTH_CONFIG } from './utils/constants';
 
 export class VisualDashboardView extends ItemView {
 	private miniNotesGrid!: HTMLElement;
@@ -552,10 +552,7 @@ export class VisualDashboardView extends ItemView {
 		try {
 			// Get content and preview
 			const content = await this.app.vault.cachedRead(file);
-		const cleanContent = stripMarkdown(content);
-		const previewConfig = PREVIEW_LENGTH_CONFIG[this.plugin.data.previewLength || 'long'];
-		const maxChars = previewConfig.maxChars;
-		const previewLength = Math.min(cleanContent.length, maxChars);
+		const maxChars = PREVIEW_LENGTH_CONFIG[this.plugin.data.previewLength || 'long'].maxChars;
 
 		// Truncate raw content for preview (keep markdown formatting for proper rendering)
 		let previewText = content;
@@ -614,12 +611,6 @@ export class VisualDashboardView extends ItemView {
 		if (savedColor) {
 			card.style.backgroundColor = savedColor;
 		}
-
-		// Apply max height limit
-		card.style.maxHeight = `${MAX_CARD_HEIGHT}px`;
-		// Required to prevent card content from exceeding max height - dynamic styling needed per card
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		card.style.overflow = 'hidden';
 
 		// Pin button (shows on hover)
 		const pinBtn = card.createDiv({ cls: 'card-pin-btn' + (isPinned ? ' pinned' : '') });
