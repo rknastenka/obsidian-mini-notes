@@ -448,39 +448,41 @@
 }
 
 .mini-notes-grid-section {
-    column-count: 5;
-    column-gap: 12px;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
     width: 100%;
     contain: layout style;
+    align-items: start;
 }
 
 @media (min-width: 1400px) {
     .mini-notes-grid-section {
-        column-count: 6;
+        grid-template-columns: repeat(6, 1fr);
     }
 }
 
 @media (min-width: 1100px) and (max-width: 1399px) {
     .mini-notes-grid-section {
-        column-count: 5;
+        grid-template-columns: repeat(5, 1fr);
     }
 }
 
 @media (min-width: 800px) and (max-width: 1099px) {
     .mini-notes-grid-section {
-        column-count: 4;
+        grid-template-columns: repeat(4, 1fr);
     }
 }
 
 @media (min-width: 500px) and (max-width: 799px) {
     .mini-notes-grid-section {
-        column-count: 3;
+        grid-template-columns: repeat(3, 1fr);
     }
 }
 
 @media (max-width: 499px) {
     .mini-notes-grid-section {
-        column-count: 2;
+        grid-template-columns: repeat(2, 1fr);
     }
 }
 
@@ -490,17 +492,15 @@
 
 .dashboard-card {
     position: relative;
+    display: flex;
+    flex-direction: column;
     background: var(--background-secondary);
     border: 1px solid var(--background-modifier-border);
     border-radius: 3px;
     padding: 10px 12px;
     cursor: pointer;
     transition: border-color 0.12s ease, transform 0.12s ease, opacity 0.12s ease, box-shadow 0.12s ease;
-    display: inline-block;
-    width: 100%;
-    break-inside: avoid;
-    margin-bottom: 12px;
-    max-height: var(--card-max-height, 600px);
+    height: var(--card-max-height, 600px);
     overflow: hidden;
     will-change: transform;
     transform: translateZ(0);
@@ -895,7 +895,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    margin-top: 8px;
+    margin-top: auto;
+    padding-top: 8px;
 }
 
 .card-tags {
