@@ -91,6 +91,21 @@ export class MiniNotesSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName('Preview length')
+			.setDesc('Controls how much of each note is shown in the card view')
+			.addDropdown(dropdown => {
+				dropdown.addOption('short', 'Short');
+				dropdown.addOption('medium', 'Medium');
+				dropdown.addOption('long', 'Long');
+				dropdown.setValue(this.plugin.data.previewLength || 'long');
+				dropdown.onChange(async (value) => {
+					this.plugin.data.previewLength = value as 'short' | 'medium' | 'long';
+					await this.plugin.savePluginData();
+					this.app.workspace.trigger('mini-notes:settings-changed');
+				});
+			});
+
+		new Setting(containerEl)
 			.setName('Theme color')
 			.setDesc('Color for borders, pins, and accents')
 			.addDropdown(dropdown => {

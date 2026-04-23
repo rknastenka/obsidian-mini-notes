@@ -500,7 +500,7 @@
     width: 100%;
     break-inside: avoid;
     margin-bottom: 12px;
-    max-height: 600px;
+    max-height: var(--card-max-height, 600px);
     overflow: hidden;
     will-change: transform;
     transform: translateZ(0);
@@ -832,8 +832,8 @@
 .card-preview > div:not(:has(pre)) {
     display: -webkit-box;
     -webkit-box-orient: vertical;
-    -webkit-line-clamp: 15;
-    line-clamp: 15;
+    -webkit-line-clamp: var(--card-line-clamp, 15);
+    line-clamp: var(--card-line-clamp, 15);
     overflow: hidden;
 }
 

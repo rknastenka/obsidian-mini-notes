@@ -4,7 +4,7 @@ import { VIEW_TYPE_VISUAL_DASHBOARD } from './utils/types';
 import { extractTags, getPreviewText, stripMarkdown } from './utils/markdown';
 import { formatDate } from './utils/date';
 import { parseSearchOperators, getSearchSuggestions, filterFiles, isSimpleTextSearch, highlightSearchTerms, getCleanQuery, type SearchState } from './utils/search';
-import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH, CARD_SIZE, MAX_CARD_HEIGHT } from './utils/constants';
+import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH, CARD_SIZE, MAX_CARD_HEIGHT, PREVIEW_LENGTH_CONFIG } from './utils/constants';
 
 export class VisualDashboardView extends ItemView {
 	private miniNotesGrid!: HTMLElement;
@@ -59,8 +59,9 @@ export class VisualDashboardView extends ItemView {
 		container.empty();
 		container.addClass('visual-dashboard-container');
 
-		// Apply theme color
+		// Apply theme color and preview length
 		this.applyThemeColor();
+		this.applyPreviewLength();
 
 		// Create header - single row
 		const header = this.contentEl.createDiv({ cls: 'dashboard-header' });
@@ -234,15 +235,25 @@ export class VisualDashboardView extends ItemView {
 	private async refreshView() {
 		// Update theme color
 		this.applyThemeColor();
-		
+
+		// Update preview length CSS properties
+		this.applyPreviewLength();
+
 		// Update view title
 		const titleElement = this.contentEl.querySelector('.dashboard-title') as HTMLElement;
 		if (titleElement) {
 			titleElement.textContent = this.plugin.data.viewTitle || 'Do Your Best Today!';
 		}
-		
+
 		// Re-render cards to reflect setting changes
 		await this.renderCards();
+	}
+
+	private applyPreviewLength() {
+		const config = PREVIEW_LENGTH_CONFIG[this.plugin.data.previewLength || 'long'];
+		const container = this.contentEl;
+		container.style.setProperty('--card-max-height', `${config.maxCardHeight}px`);
+		container.style.setProperty('--card-line-clamp', `${config.lineClamp}`);
 	}
 
 	private debouncedRefresh() {
@@ -542,15 +553,17 @@ export class VisualDashboardView extends ItemView {
 			// Get content and preview
 			const content = await this.app.vault.cachedRead(file);
 		const cleanContent = stripMarkdown(content);
-		const previewLength = Math.min(cleanContent.length, MAX_PREVIEW_LENGTH);
-		
+		const previewConfig = PREVIEW_LENGTH_CONFIG[this.plugin.data.previewLength || 'long'];
+		const maxChars = previewConfig.maxChars;
+		const previewLength = Math.min(cleanContent.length, maxChars);
+
 		// Truncate raw content for preview (keep markdown formatting for proper rendering)
 		let previewText = content;
-		if (content.length > MAX_PREVIEW_LENGTH) {
+		if (content.length > maxChars) {
 			// Find a good break point (end of line) near the limit
-			const truncated = content.substring(0, MAX_PREVIEW_LENGTH);
+			const truncated = content.substring(0, maxChars);
 			const lastNewline = truncated.lastIndexOf('\n');
-			previewText = lastNewline > MAX_PREVIEW_LENGTH * 0.7 
+			previewText = lastNewline > maxChars * 0.7
 				? truncated.substring(0, lastNewline)
 				: truncated;
 		}
