@@ -433,9 +433,14 @@ export class VisualDashboardView extends ItemView {
 		// Filter out config folder files to avoid reading plugin/config files
 		files = files.filter((file: TFile) => !file.path.startsWith(this.app.vault.configDir + '/'));
 		
-		files = files
-			.sort((a: TFile, b: TFile) => b.stat.mtime - a.stat.mtime)
-			.slice(0, this.plugin.data.maxNotes * FILE_FETCH_MULTIPLIER); // Get more initially for filtering
+		// Sort by mtime but always retain files that are in the saved noteOrder
+		// so their custom position is never lost due to the pool size cutoff
+		const savedOrderSet = new Set(this.plugin.data.noteOrder);
+		const poolLimit = this.plugin.data.maxNotes * FILE_FETCH_MULTIPLIER;
+		files.sort((a: TFile, b: TFile) => b.stat.mtime - a.stat.mtime);
+		const inOrder = files.filter(f => savedOrderSet.has(f.path));
+		const notInOrder = files.filter(f => !savedOrderSet.has(f.path));
+		files = [...inOrder, ...notInOrder].slice(0, poolLimit); // Get more initially for filtering
 
 		// Pre-load content for tag filtering with error handling
 		const fileContents = new Map<string, string>();
@@ -482,8 +487,17 @@ export class VisualDashboardView extends ItemView {
 			(path) => this.plugin.data.noteColors[path]
 		);
 
-		// Limit after filtering
-		files = files.slice(0, this.plugin.data.maxNotes);
+		// Sort by custom order first, then limit — so custom-ordered notes aren't
+		// accidentally dropped by the slice before their position is evaluated
+		const sortByOrderEarly = (a: TFile, b: TFile) => {
+			const aOrder = this.plugin.getOrderIndex(a.path);
+			const bOrder = this.plugin.getOrderIndex(b.path);
+			if (aOrder > -1 && bOrder > -1) return aOrder - bOrder;
+			if (aOrder > -1) return -1;
+			if (bOrder > -1) return 1;
+			return b.stat.mtime - a.stat.mtime;
+		};
+		files = files.sort(sortByOrderEarly).slice(0, this.plugin.data.maxNotes);
 
 		// Separate and sort files by pin status
 		const sortByOrder = (a: TFile, b: TFile) => {
