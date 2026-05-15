@@ -18,11 +18,11 @@ Review them later in a colorful Google Keep-style card-based view, where you can
 
 <!-- **Aligns with whatever theme you have!**
 
-![Other Themes](src/imgs/other-themes.jpg) -->
+![Other Themes](src/imgs/other-themes.jpg) 
 
 ### **IOS & Android Mobile Support**
 <img src="src/imgs/android.jpeg" alt="Android View" height="500" />
-
+-->
 
 ## Hover Editing Overlay!
 
