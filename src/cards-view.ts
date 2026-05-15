@@ -1,4 +1,5 @@
 import { ItemView, TFile, WorkspaceLeaf, setIcon, MarkdownRenderer } from 'obsidian';
+import { NoteEditorOverlay } from './note-editor-overlay';
 import type VisualDashboardPlugin from './main';
 import { VIEW_TYPE_VISUAL_DASHBOARD } from './utils/types';
 import { extractTags, getPreviewText, stripMarkdown } from './utils/markdown';
@@ -833,12 +834,25 @@ export class VisualDashboardView extends ItemView {
 			}
 		});
 
-		// Click handler to open the note
+		// Left-click: open in a normal tab
 		card.addEventListener('click', (e: MouseEvent) => {
-			// Don't open if clicking pin button or during drag
+			// Don't open if clicking action buttons, color dropdown, or during drag
 			if ((e.target as HTMLElement).closest('.card-pin-btn')) return;
+			if ((e.target as HTMLElement).closest('.card-color-btn')) return;
+			if ((e.target as HTMLElement).closest('.card-color-dropdown')) return;
 			const leaf = this.app.workspace.getLeaf('tab');
 			void leaf.openFile(file);
+		});
+
+		// Right-click: open inline overlay editor
+		card.addEventListener('contextmenu', (e: MouseEvent) => {
+			// Don't intercept right-clicks on action buttons
+			if ((e.target as HTMLElement).closest('.card-pin-btn')) return;
+			if ((e.target as HTMLElement).closest('.card-color-btn')) return;
+			if ((e.target as HTMLElement).closest('.card-color-dropdown')) return;
+			e.preventDefault();
+			const overlay = new NoteEditorOverlay(this.app, file, this.contentEl);
+			void overlay.open();
 		});
 
 		// Drag and drop handlers
