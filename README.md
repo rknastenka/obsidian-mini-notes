@@ -16,19 +16,31 @@ Review them later in a colorful Google Keep-style card-based view, where you can
 
 ![Dark Theme](src/imgs/dark-theme.png)
 
-**Aligns with whatever theme you have!**
+<!-- **Aligns with whatever theme you have!**
 
-![Other Themes](src/imgs/other-themes.jpg)
+![Other Themes](src/imgs/other-themes.jpg) -->
 
 ### **IOS & Android Mobile Support**
 <img src="src/imgs/android.jpeg" alt="Android View" height="500" />
 
----
-**Coloring Notes:**  Hover on a note >> select the color you want.
 
-<img src="src/imgs/coloring.png" alt="Coloring Notes Steps" width="800" />
+## Hover Editing Overlay!
+
+- **Left Click** the note to edit!.
+- **Right Click** the note to open it in a seprate full screen tab.
+
+![Hover editing](src/imgs/1.png)
+![Hover editing](src/imgs/2.png)
+
+
+## Coloring Notes: Hover on a note >> select the color you want.
+
+<p align="center">
+  <img src="src/imgs/coloring.png" alt="Coloring Notes Steps" width="800" />
+</p>
 
 ---
+
 
 ### Creating a New Mini Note
 - Click on the icon in the cards view
