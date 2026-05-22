@@ -19,6 +19,7 @@ export class VisualDashboardView extends ItemView {
 	private settingsChangedHandler: () => void;
 	private refreshTimeoutId: number | null = null;
 	private eventsRegistered = false;
+	private isDragging = false;
 
 	// Filter state
 	private filterPinned: 'all' | 'pinned' | 'unpinned' = 'all';
@@ -33,7 +34,7 @@ export class VisualDashboardView extends ItemView {
 	private selectedSuggestionIndex: number = -1;
 	private currentSuggestions: Array<{ type: string; value: string; display: string }> = [];
 	private currentSuggestionQuery: string = '';
-	
+
 	// Undo state
 	private deletedNotesStack: { path: string; content: string }[] = [];
 	private activeColorDropdown: HTMLElement | null = null;
@@ -73,14 +74,14 @@ export class VisualDashboardView extends ItemView {
 		const title = header.createEl('h1', { text: this.plugin.data.viewTitle || 'Do Your Best Today!', cls: 'dashboard-title editable-title' });
 		title.setAttribute('contenteditable', 'true');
 		title.setAttribute('spellcheck', 'false');
-		
+
 		// Save title on blur
 		title.addEventListener('blur', () => {
 			const newTitle = title.textContent?.trim() || 'Do Your Best Today!';
 			this.plugin.data.viewTitle = newTitle;
 			void this.plugin.savePluginData();
 		});
-		
+
 		// Save title on Enter key
 		title.addEventListener('keydown', (e: KeyboardEvent) => {
 			if (e.key === 'Enter') {
@@ -88,7 +89,7 @@ export class VisualDashboardView extends ItemView {
 				title.blur();
 			}
 		});
-		
+
 		// Reload on double-click
 		title.addEventListener('dblclick', () => {
 			void this.renderCards();
@@ -102,20 +103,20 @@ export class VisualDashboardView extends ItemView {
 		const searchWrapper = searchContainer.createDiv({ cls: 'search-wrapper' });
 		const searchIcon = searchWrapper.createDiv({ cls: 'search-icon' });
 		setIcon(searchIcon, 'search');
-		
-		const searchInput = searchWrapper.createEl('input', { 
-			type: 'text', 
+
+		const searchInput = searchWrapper.createEl('input', {
+			type: 'text',
 			placeholder: 'Search notes (try folder:, tag:, color:, type:, is:pinned)',
 			cls: 'search-input'
 		});
-		
+
 		searchInput.value = this.filterSearch;
-		
+
 		// Clear button
 		const clearBtn = searchWrapper.createDiv({ cls: 'search-clear-btn' });
 		setIcon(clearBtn, 'x');
 		clearBtn.style.display = this.filterSearch ? 'flex' : 'none';
-		
+
 		clearBtn.addEventListener('click', () => {
 			searchInput.value = '';
 			this.filterSearch = '';
@@ -123,36 +124,36 @@ export class VisualDashboardView extends ItemView {
 			this.clearAllFilters();
 			void this.renderCards();
 		});
-		
+
 		// Focus search on icon click
 		searchIcon.addEventListener('click', () => {
 			searchInput.focus();
 		});
-		
+
 		// Autocomplete suggestions dropdown
 		this.searchSuggestionsEl = searchContainer.createDiv({ cls: 'search-suggestions' });
-		
+
 		// Show initial suggestions on focus
 		searchInput.addEventListener('focus', () => {
 			if (!searchInput.value) {
 				this.updateSearchSuggestions('');
 			}
 		});
-		
+
 		// Event listeners for search
 		searchInput.addEventListener('input', (e) => {
 			const target = e.target as HTMLInputElement;
 			this.filterSearch = target.value;
 			clearBtn.style.display = target.value ? 'flex' : 'none';
-			
+
 			// Show suggestions
 			this.updateSearchSuggestions(target.value);
-			
+
 			// Parse operators and use debounced refresh
 			this.updateSearchState(target.value);
 			this.debouncedRefresh();
 		});
-		
+
 		// Close suggestions on blur
 		searchInput.addEventListener('blur', () => {
 			setTimeout(() => {
@@ -162,16 +163,16 @@ export class VisualDashboardView extends ItemView {
 				}
 			}, 200);
 		});
-		
+
 		// Handle keyboard navigation in suggestions
 		searchInput.addEventListener('keydown', (e: KeyboardEvent) => {
 			if (!this.searchSuggestionsEl || !this.searchSuggestionsEl.hasClass('show')) {
 				return;
 			}
-			
+
 			const suggestions = this.searchSuggestionsEl.querySelectorAll('.search-suggestion-item');
 			if (suggestions.length === 0) return;
-			
+
 			if (e.key === 'ArrowDown') {
 				e.preventDefault();
 				this.selectedSuggestionIndex = Math.min(this.selectedSuggestionIndex + 1, suggestions.length - 1);
@@ -238,7 +239,7 @@ export class VisualDashboardView extends ItemView {
 		this.registerDomEvent(document, 'keydown', async (e: KeyboardEvent) => {
 			// Only handle if this view is the active one in the workspace
 			if (this.app.workspace.getActiveViewOfType(VisualDashboardView) !== this) return;
-			
+
 			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
 				const lastDeleted = this.deletedNotesStack.pop();
 				if (lastDeleted) {
@@ -261,13 +262,13 @@ export class VisualDashboardView extends ItemView {
 	private async refreshView() {
 		// Update theme color
 		this.applyThemeColor();
-		
+
 		// Update view title
 		const titleElement = this.contentEl.querySelector('.dashboard-title') as HTMLElement;
 		if (titleElement) {
 			titleElement.textContent = this.plugin.data.viewTitle || 'Do Your Best Today!';
 		}
-		
+
 		// Re-render cards to reflect setting changes
 		await this.renderCards();
 	}
@@ -276,8 +277,11 @@ export class VisualDashboardView extends ItemView {
 		if (this.refreshTimeoutId !== null) {
 			window.clearTimeout(this.refreshTimeoutId);
 		}
-		
+
 		this.refreshTimeoutId = window.setTimeout(() => {
+			// Don't rebuild the DOM while the user is dragging — it would
+			// destroy the dragged element and silently lose the reorder.
+			if (this.isDragging) return;
 			void this.renderCards();
 			this.refreshTimeoutId = null;
 		}, DEBOUNCE_REFRESH_MS);
@@ -294,14 +298,14 @@ export class VisualDashboardView extends ItemView {
 
 	private updateSearchSuggestions(query: string) {
 		if (!this.searchSuggestionsEl) return;
-		
+
 		this.searchSuggestionsEl.empty();
 		this.selectedSuggestionIndex = -1;
 		this.currentSuggestionQuery = query;
-		
+
 		const suggestions = getSearchSuggestions(query, this.allTags, this.allFolders, this.plugin.data.noteColors);
 		this.currentSuggestions = suggestions;
-		
+
 		if (suggestions.length > 0) {
 			suggestions.forEach((suggestion, index) => {
 				const suggestionEl = this.searchSuggestionsEl!.createDiv({ cls: 'search-suggestion-item' });
@@ -364,22 +368,22 @@ export class VisualDashboardView extends ItemView {
 		this.filterPinned = 'all';
 		this.filterColors = [];
 		this.filterOperators.clear();
-		
+
 		const searchInput = this.contentEl.querySelector('.search-input') as HTMLInputElement;
 		if (searchInput) {
 			searchInput.value = '';
 		}
-		
+
 		const clearBtn = this.contentEl.querySelector('.search-clear-btn') as HTMLElement;
 		if (clearBtn) {
 			clearBtn.style.display = 'none';
 		}
-		
+
 		const pinToggle = this.contentEl.querySelector('.filter-icon[aria-label*=\"pinned\"]') as HTMLElement;
 		if (pinToggle) {
 			pinToggle.removeClass('active');
 		}
-		
+
 		const filterChipsContainer = this.contentEl.querySelector('.filter-chips-container') as HTMLElement;
 		if (filterChipsContainer) {
 			filterChipsContainer.style.display = 'none';
@@ -424,172 +428,181 @@ export class VisualDashboardView extends ItemView {
 
 			// Get all markdown files, filtered by source folder if specified
 			let files = this.app.vault.getMarkdownFiles();
-		
+
 			// Filter by source folder if specified ("/" = all notes)
 			const sourceFolder = this.plugin.data.sourceFolder.trim();
 			if (sourceFolder && sourceFolder !== '/') {
 				files = files.filter((file: TFile) => file.path.startsWith(sourceFolder));
 			}
-			
-		// Filter out config folder files to avoid reading plugin/config files
-		files = files.filter((file: TFile) => !file.path.startsWith(this.app.vault.configDir + '/'));
-		
-		// Sort by mtime but always retain files that are in the saved noteOrder
-		// so their custom position is never lost due to the pool size cutoff
-		const savedOrderSet = new Set(this.plugin.data.noteOrder);
-		const poolLimit = this.plugin.data.maxNotes * FILE_FETCH_MULTIPLIER;
-		files.sort((a: TFile, b: TFile) => b.stat.mtime - a.stat.mtime);
-		const inOrder = files.filter(f => savedOrderSet.has(f.path));
-		const notInOrder = files.filter(f => !savedOrderSet.has(f.path));
-		files = [...inOrder, ...notInOrder].slice(0, poolLimit); // Get more initially for filtering
 
-		// Pre-load content for tag filtering with error handling
-		const fileContents = new Map<string, string>();
-		const tagSet = new Set<string>();
-		for (const file of files) {
-			try {
-				const content = await this.app.vault.cachedRead(file);
-				fileContents.set(file.path, content);
-				const tags = extractTags(content);
-				tags.forEach(tag => tagSet.add(tag));
-			} catch (error) {
-				console.warn(`Failed to read file ${file.path}:`, error);
-				fileContents.set(file.path, '');
+			// Filter out config folder files to avoid reading plugin/config files
+			files = files.filter((file: TFile) => !file.path.startsWith(this.app.vault.configDir + '/'));
+
+			// Sort by mtime but always retain files that are in the saved noteOrder
+			// so their custom position is never lost due to the pool size cutoff
+			const savedOrderSet = new Set(this.plugin.data.noteOrder);
+			const poolLimit = this.plugin.data.maxNotes * FILE_FETCH_MULTIPLIER;
+			files.sort((a: TFile, b: TFile) => b.stat.mtime - a.stat.mtime);
+			const inOrder = files.filter(f => savedOrderSet.has(f.path));
+			const notInOrder = files.filter(f => !savedOrderSet.has(f.path));
+			files = [...inOrder, ...notInOrder].slice(0, poolLimit); // Get more initially for filtering
+
+			// Pre-load content for tag filtering with error handling
+			const fileContents = new Map<string, string>();
+			const tagSet = new Set<string>();
+			for (const file of files) {
+				try {
+					const content = await this.app.vault.cachedRead(file);
+					fileContents.set(file.path, content);
+					const tags = extractTags(content);
+					tags.forEach(tag => tagSet.add(tag));
+				} catch (error) {
+					console.warn(`Failed to read file ${file.path}:`, error);
+					fileContents.set(file.path, '');
+				}
 			}
-		}
 
-		this.allTags = Array.from(tagSet).sort();
+			this.allTags = Array.from(tagSet).sort();
 
-		// Get all folders in vault for folder suggestions
-		const folderSet = new Set<string>();
-		folderSet.add('/'); // Add root
-		this.app.vault.getAllLoadedFiles().forEach(file => {
-			if ('children' in file && file.children !== undefined) {
-				if (file.path && file.path !== '/' && file.path !== '') folderSet.add(file.path);
-			}
-		});
-		this.allFolders = Array.from(folderSet).sort();
+			// Get all folders in vault for folder suggestions
+			const folderSet = new Set<string>();
+			folderSet.add('/'); // Add root
+			this.app.vault.getAllLoadedFiles().forEach(file => {
+				if ('children' in file && file.children !== undefined) {
+					if (file.path && file.path !== '/' && file.path !== '') folderSet.add(file.path);
+				}
+			});
+			this.allFolders = Array.from(folderSet).sort();
 
-		// Apply all filters using search module
-		const searchState: SearchState = {
-			query: this.filterSearch,
-			filterTag: this.filterTag,
-			filterPinned: this.filterPinned,
-			filterColors: this.filterColors,
-			filterFolder: this.filterFolder,
-			filterOperators: this.filterOperators
-		};
-		
-		files = filterFiles(
-			files,
-			fileContents,
-			searchState,
-			(path) => this.plugin.isPinned(path),
-			(path) => this.plugin.data.noteColors[path]
-		);
-
-		// Sort by custom order first, then limit — so custom-ordered notes aren't
-		// accidentally dropped by the slice before their position is evaluated
-		const sortByOrderEarly = (a: TFile, b: TFile) => {
-			const aOrder = this.plugin.getOrderIndex(a.path);
-			const bOrder = this.plugin.getOrderIndex(b.path);
-			if (aOrder > -1 && bOrder > -1) return aOrder - bOrder;
-			if (aOrder > -1) return -1;
-			if (bOrder > -1) return 1;
-			return b.stat.mtime - a.stat.mtime;
-		};
-		files = files.sort(sortByOrderEarly).slice(0, this.plugin.data.maxNotes);
-
-		// Separate and sort files by pin status
-		const sortByOrder = (a: TFile, b: TFile) => {
-			const aOrder = this.plugin.getOrderIndex(a.path);
-			const bOrder = this.plugin.getOrderIndex(b.path);
-
-			if (aOrder > -1 && bOrder > -1) return aOrder - bOrder;
-			if (aOrder > -1) return -1;
-			if (bOrder > -1) return 1;
-			return b.stat.mtime - a.stat.mtime;
-		};
-
-		const pinnedFiles = files.filter(f => this.plugin.isPinned(f.path)).sort(sortByOrder);
-		const unpinnedFiles = files.filter(f => !this.plugin.isPinned(f.path)).sort(sortByOrder);
-
-		// Store the combined order for drag-and-drop
-		this.currentFiles = [...pinnedFiles, ...unpinnedFiles];
-
-		if (files.length === 0) {
-			const applyEmpty = () => {
-				this.miniNotesGrid.empty();
-				const emptyState = this.miniNotesGrid.createDiv({ cls: 'dashboard-empty-state' });
-				emptyState.createEl('h3', { text: 'No matching notes' });
-				emptyState.createEl('p', { text: 'Try adjusting your filters' });
+			// Apply all filters using search module
+			const searchState: SearchState = {
+				query: this.filterSearch,
+				filterTag: this.filterTag,
+				filterPinned: this.filterPinned,
+				filterColors: this.filterColors,
+				filterFolder: this.filterFolder,
+				filterOperators: this.filterOperators
 			};
-			
-			// @ts-ignore - View Transitions API
+
+			files = filterFiles(
+				files,
+				fileContents,
+				searchState,
+				(path) => this.plugin.isPinned(path),
+				(path) => this.plugin.data.noteColors[path]
+			);
+
+			// Sort by custom order first, then limit — so custom-ordered notes aren't
+			// accidentally dropped by the slice before their position is evaluated
+			const sortByOrderEarly = (a: TFile, b: TFile) => {
+				const aOrder = this.plugin.getOrderIndex(a.path);
+				const bOrder = this.plugin.getOrderIndex(b.path);
+				if (aOrder > -1 && bOrder > -1) return aOrder - bOrder;
+				if (aOrder > -1) return -1;
+				if (bOrder > -1) return 1;
+				return b.stat.mtime - a.stat.mtime;
+			};
+			files = files.sort(sortByOrderEarly).slice(0, this.plugin.data.maxNotes);
+
+			// Separate and sort files by pin status
+			const sortByOrder = (a: TFile, b: TFile) => {
+				const aOrder = this.plugin.getOrderIndex(a.path);
+				const bOrder = this.plugin.getOrderIndex(b.path);
+
+				if (aOrder > -1 && bOrder > -1) return aOrder - bOrder;
+				if (aOrder > -1) return -1;
+				if (bOrder > -1) return 1;
+				return b.stat.mtime - a.stat.mtime;
+			};
+
+			const pinnedFiles = files.filter(f => this.plugin.isPinned(f.path)).sort(sortByOrder);
+			const unpinnedFiles = files.filter(f => !this.plugin.isPinned(f.path)).sort(sortByOrder);
+
+			// Store the combined order for drag-and-drop
+			this.currentFiles = [...pinnedFiles, ...unpinnedFiles];
+
+			// Prune stale entries from noteOrder (deleted/moved files)
+			const currentPathSet = new Set(this.currentFiles.map(f => f.path));
+			const prunedOrder = this.plugin.data.noteOrder.filter(p => currentPathSet.has(p));
+			if (prunedOrder.length !== this.plugin.data.noteOrder.length) {
+				this.plugin.data.noteOrder = prunedOrder;
+				// Fire-and-forget — we're just cleaning up, not changing visible order
+				void this.plugin.savePluginData();
+			}
+
+			if (files.length === 0) {
+				const applyEmpty = () => {
+					this.miniNotesGrid.empty();
+					const emptyState = this.miniNotesGrid.createDiv({ cls: 'dashboard-empty-state' });
+					emptyState.createEl('h3', { text: 'No matching notes' });
+					emptyState.createEl('p', { text: 'Try adjusting your filters' });
+				};
+
+				// @ts-ignore - View Transitions API
+				if (document.startViewTransition) {
+					// @ts-ignore
+					document.startViewTransition(() => applyEmpty());
+				} else {
+					applyEmpty();
+				}
+				return;
+			}
+
+			let globalIndex = 0;
+
+			// Check if we need sections (both pinned and unpinned exist)
+			const needsSections = pinnedFiles.length > 0 && unpinnedFiles.length > 0;
+			const fragment = document.createDocumentFragment();
+
+			if (needsSections) {
+				// Render pinned section
+				if (pinnedFiles.length > 0) {
+					const pinnedGrid = fragment.createEl('div', { cls: 'mini-notes-grid-section' });
+					for (const file of pinnedFiles) {
+						const card = await this.createCard(file, globalIndex++);
+						if (card) pinnedGrid.appendChild(card);
+					}
+				}
+
+				// Separator line between sections
+				fragment.createEl('div', { cls: 'section-separator' });
+
+				// Render all notes section
+				if (unpinnedFiles.length > 0) {
+					const notesGrid = fragment.createEl('div', { cls: 'mini-notes-grid-section' });
+					for (const file of unpinnedFiles) {
+						const card = await this.createCard(file, globalIndex++);
+						if (card) notesGrid.appendChild(card);
+					}
+				}
+			} else {
+				// Single section without header
+				const singleGrid = fragment.createEl('div', { cls: 'mini-notes-grid-section' });
+				for (const file of [...pinnedFiles, ...unpinnedFiles]) {
+					const card = await this.createCard(file, globalIndex++);
+					if (card) singleGrid.appendChild(card);
+				}
+			}
+
+			const applyDOM = () => {
+				this.miniNotesGrid.empty();
+				this.miniNotesGrid.appendChild(fragment);
+			};
+
+			// @ts-ignore - Document View Transitions API
 			if (document.startViewTransition) {
 				// @ts-ignore
-				document.startViewTransition(() => applyEmpty());
+				document.startViewTransition(() => applyDOM());
 			} else {
-				applyEmpty();
+				applyDOM();
 			}
-			return;
-		}
-
-		let globalIndex = 0;
-
-		// Check if we need sections (both pinned and unpinned exist)
-		const needsSections = pinnedFiles.length > 0 && unpinnedFiles.length > 0;
-		const fragment = document.createDocumentFragment();
-
-		if (needsSections) {
-			// Render pinned section
-			if (pinnedFiles.length > 0) {
-				const pinnedGrid = fragment.createEl('div', { cls: 'mini-notes-grid-section' });
-				for (const file of pinnedFiles) {
-					const card = await this.createCard(file, globalIndex++);
-					if (card) pinnedGrid.appendChild(card);
-				}
-			}
-
-			// Separator line between sections
-			fragment.createEl('div', { cls: 'section-separator' });
-
-			// Render all notes section
-			if (unpinnedFiles.length > 0) {
-				const notesGrid = fragment.createEl('div', { cls: 'mini-notes-grid-section' });
-				for (const file of unpinnedFiles) {
-					const card = await this.createCard(file, globalIndex++);
-					if (card) notesGrid.appendChild(card);
-				}
-			}
-		} else {
-			// Single section without header
-			const singleGrid = fragment.createEl('div', { cls: 'mini-notes-grid-section' });
-			for (const file of [...pinnedFiles, ...unpinnedFiles]) {
-				const card = await this.createCard(file, globalIndex++);
-				if (card) singleGrid.appendChild(card);
-			}
-		}
-
-		const applyDOM = () => {
-			this.miniNotesGrid.empty();
-			this.miniNotesGrid.appendChild(fragment);
-		};
-
-		// @ts-ignore - Document View Transitions API
-		if (document.startViewTransition) {
-			// @ts-ignore
-			document.startViewTransition(() => applyDOM());
-		} else {
-			applyDOM();
-		}
 		} catch (error) {
 			console.error('Error rendering cards:', error);
 			const errorMsg = this.miniNotesGrid.createDiv({ cls: 'dashboard-error' });
 			const errorText = errorMsg.createEl('p');
 			errorText.createSpan({ text: 'Failed to render cards. Please open the console (Ctrl+Shift+I), screenshot the error, and ' });
-			const link = errorText.createEl('a', { 
-			text: 'Report it on GitHub',
+			const link = errorText.createEl('a', {
+				text: 'Report it on GitHub',
 				href: 'https://github.com/rknastenka/mini-notes/issues'
 			});
 			link.setAttribute('target', '_blank');
@@ -603,7 +616,7 @@ export class VisualDashboardView extends ItemView {
 		card.setAttribute('data-path', file.path);
 		card.setAttribute('data-index', index.toString());
 		card.setAttribute('draggable', 'true');
-		
+
 		// Add isolated View Transition Name to smoothly animate layout bumps
 		const safeCssIdent = 'card-' + file.path.replace(/[^a-zA-Z0-9_-]/g, '-');
 		card.style.setProperty('view-transition-name', safeCssIdent);
@@ -611,255 +624,255 @@ export class VisualDashboardView extends ItemView {
 		try {
 			// Get content and preview
 			const content = await this.app.vault.cachedRead(file);
-		const cleanContent = stripMarkdown(content);
-		const previewLength = Math.min(cleanContent.length, MAX_PREVIEW_LENGTH);
-		
-		// Truncate raw content for preview (keep markdown formatting for proper rendering)
-		let previewText = content;
-		if (content.length > MAX_PREVIEW_LENGTH) {
-			// Find a good break point (end of line) near the limit
-			const truncated = content.substring(0, MAX_PREVIEW_LENGTH);
-			const lastNewline = truncated.lastIndexOf('\n');
-			previewText = lastNewline > MAX_PREVIEW_LENGTH * 0.7 
-				? truncated.substring(0, lastNewline)
-				: truncated;
-		}
-		
-		// Remove Obsidian tags from preview (they're shown in the footer)
-		// split by lines and only remove tags outside code blocks
-		const lines = previewText.split('\n');
-		let inCodeBlock = false;
-		const processedLines = lines.map(line => {
-			// Check if we're entering/exiting a code block
-			if (line.trim().startsWith('```')) {
-				inCodeBlock = !inCodeBlock;
-				return line; // Keep the line as-is
+			const cleanContent = stripMarkdown(content);
+			const previewLength = Math.min(cleanContent.length, MAX_PREVIEW_LENGTH);
+
+			// Truncate raw content for preview (keep markdown formatting for proper rendering)
+			let previewText = content;
+			if (content.length > MAX_PREVIEW_LENGTH) {
+				// Find a good break point (end of line) near the limit
+				const truncated = content.substring(0, MAX_PREVIEW_LENGTH);
+				const lastNewline = truncated.lastIndexOf('\n');
+				previewText = lastNewline > MAX_PREVIEW_LENGTH * 0.7
+					? truncated.substring(0, lastNewline)
+					: truncated;
 			}
-			
-			// If we're in a code block, don't touch anything
-			if (inCodeBlock) {
-				return line;
-			}
-			
-			// If we're outside code blocks, remove Obsidian tags but preserve inline code
-			// First protect inline code
-			const inlineCodeParts: string[] = [];
-			let tempLine = line.replace(/`[^`]+`/g, (match) => {
-				inlineCodeParts.push(match);
-				return `\u200B${inlineCodeParts.length - 1}\u200B`;
+
+			// Remove Obsidian tags from preview (they're shown in the footer)
+			// split by lines and only remove tags outside code blocks
+			const lines = previewText.split('\n');
+			let inCodeBlock = false;
+			const processedLines = lines.map(line => {
+				// Check if we're entering/exiting a code block
+				if (line.trim().startsWith('```')) {
+					inCodeBlock = !inCodeBlock;
+					return line; // Keep the line as-is
+				}
+
+				// If we're in a code block, don't touch anything
+				if (inCodeBlock) {
+					return line;
+				}
+
+				// If we're outside code blocks, remove Obsidian tags but preserve inline code
+				// First protect inline code
+				const inlineCodeParts: string[] = [];
+				let tempLine = line.replace(/`[^`]+`/g, (match) => {
+					inlineCodeParts.push(match);
+					return `\u200B${inlineCodeParts.length - 1}\u200B`;
+				});
+
+				// Remove Obsidian tags (space + # + alphanumeric)
+				tempLine = tempLine.replace(/(\s)#[a-zA-Z][a-zA-Z0-9_-]*/g, '$1');
+				tempLine = tempLine.replace(/^#[a-zA-Z][a-zA-Z0-9_-]*/g, '');
+
+				// Restore inline code
+				tempLine = tempLine.replace(/\u200B(\d+)\u200B/g, (_, idx) => inlineCodeParts[parseInt(idx)] || '');
+
+				return tempLine;
 			});
-			
-			// Remove Obsidian tags (space + # + alphanumeric)
-			tempLine = tempLine.replace(/(\s)#[a-zA-Z][a-zA-Z0-9_-]*/g, '$1');
-			tempLine = tempLine.replace(/^#[a-zA-Z][a-zA-Z0-9_-]*/g, '');
-			
-			// Restore inline code
-			tempLine = tempLine.replace(/\u200B(\d+)\u200B/g, (_, idx) => inlineCodeParts[parseInt(idx)] || '');
-			
-			return tempLine;
-		});
-		
-		previewText = processedLines.join('\n');
-		// Check if pinned
-		const isPinned = this.plugin.isPinned(file.path);
-		if (isPinned) {
-			card.addClass('card-pinned');
-		}
 
-		// Apply saved color if exists
-		const savedColor = this.plugin.data.noteColors[file.path];
-		if (savedColor) {
-			card.style.backgroundColor = savedColor;
-		}
-
-		// Apply max height limit
-		card.style.maxHeight = `${MAX_CARD_HEIGHT}px`;
-		// Required to prevent card content from exceeding max height - dynamic styling needed per card
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		card.style.overflow = 'hidden';
-
-		// Pin button (shows on hover)
-		const pinBtn = card.createDiv({ cls: 'card-pin-btn' + (isPinned ? ' pinned' : '') });
-		setIcon(pinBtn, 'pin');
-		pinBtn.setAttribute('aria-label', isPinned ? 'Unpin note' : 'Pin note');
-		pinBtn.addEventListener('click', (e: MouseEvent) => {
-			e.stopPropagation();
-			void this.plugin.togglePin(file.path).then(async (nowPinned) => {
-				pinBtn.classList.toggle('pinned', nowPinned);
-				card.classList.toggle('card-pinned', nowPinned);
-				await this.renderCards();
-			});
-		});
-
-		// Color button (shows on hover) next to pin
-		const colorBtn = card.createDiv({ cls: 'card-color-btn' });
-		setIcon(colorBtn, 'palette');
-		colorBtn.setAttribute('aria-label', 'Change note color');
-		
-		// Create color palette dropdown using CSS variables
-		const pastelColors = [
-			'var(--pastel-peach)',    // Peach
-			'var(--pastel-yellow)',   // Yellow
-			'var(--pastel-green)',    // Green
-			'var(--pastel-blue)',     // Blue
-			'var(--pastel-purple)',   // Purple
-			'var(--pastel-magenta)',  // Pink
-			'var(--pastel-gray)'      // Gray (remove color)
-		];
-		
-		const colorDropdown = card.createDiv({ cls: 'card-color-dropdown' });
-		
-		pastelColors.forEach((color, index) => {
-			const colorCircle = colorDropdown.createDiv({ cls: 'color-circle' });
-			colorCircle.style.backgroundColor = color;
-			
-			// Last color is for removing
-			if (index === pastelColors.length - 1) {
-				colorCircle.addClass('color-circle-clear');
-				colorCircle.setAttribute('aria-label', 'Remove color');
-			} else {
-				colorCircle.setAttribute('aria-label', 'Apply color');
+			previewText = processedLines.join('\n');
+			// Check if pinned
+			const isPinned = this.plugin.isPinned(file.path);
+			if (isPinned) {
+				card.addClass('card-pinned');
 			}
-			
-			colorCircle.addEventListener('click', (e: MouseEvent) => {
+
+			// Apply saved color if exists
+			const savedColor = this.plugin.data.noteColors[file.path];
+			if (savedColor) {
+				card.style.backgroundColor = savedColor;
+			}
+
+			// Apply max height limit
+			card.style.maxHeight = `${MAX_CARD_HEIGHT}px`;
+			// Required to prevent card content from exceeding max height - dynamic styling needed per card
+			// eslint-disable-next-line obsidianmd/no-static-styles-assignment
+			card.style.overflow = 'hidden';
+
+			// Pin button (shows on hover)
+			const pinBtn = card.createDiv({ cls: 'card-pin-btn' + (isPinned ? ' pinned' : '') });
+			setIcon(pinBtn, 'pin');
+			pinBtn.setAttribute('aria-label', isPinned ? 'Unpin note' : 'Pin note');
+			pinBtn.addEventListener('click', (e: MouseEvent) => {
 				e.stopPropagation();
-				
-				void (async () => {
-					if (index === pastelColors.length - 1) {
-						// Remove color - required to reset dynamically applied background color
-						// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-						card.style.backgroundColor = '';
-						delete this.plugin.data.noteColors[file.path];
-					} else {
-						// Apply color using CSS variable
-						card.style.backgroundColor = color;
-						// Store the CSS variable name so it adapts to theme changes
-						this.plugin.data.noteColors[file.path] = color;
-					}
-					
-					await this.plugin.savePluginData();
+				void this.plugin.togglePin(file.path).then(async (nowPinned) => {
+					pinBtn.classList.toggle('pinned', nowPinned);
+					card.classList.toggle('card-pinned', nowPinned);
+					await this.renderCards();
+				});
+			});
+
+			// Color button (shows on hover) next to pin
+			const colorBtn = card.createDiv({ cls: 'card-color-btn' });
+			setIcon(colorBtn, 'palette');
+			colorBtn.setAttribute('aria-label', 'Change note color');
+
+			// Create color palette dropdown using CSS variables
+			const pastelColors = [
+				'var(--pastel-peach)',    // Peach
+				'var(--pastel-yellow)',   // Yellow
+				'var(--pastel-green)',    // Green
+				'var(--pastel-blue)',     // Blue
+				'var(--pastel-purple)',   // Purple
+				'var(--pastel-magenta)',  // Pink
+				'var(--pastel-gray)'      // Gray (remove color)
+			];
+
+			const colorDropdown = card.createDiv({ cls: 'card-color-dropdown' });
+
+			pastelColors.forEach((color, index) => {
+				const colorCircle = colorDropdown.createDiv({ cls: 'color-circle' });
+				colorCircle.style.backgroundColor = color;
+
+				// Last color is for removing
+				if (index === pastelColors.length - 1) {
+					colorCircle.addClass('color-circle-clear');
+					colorCircle.setAttribute('aria-label', 'Remove color');
+				} else {
+					colorCircle.setAttribute('aria-label', 'Apply color');
+				}
+
+				colorCircle.addEventListener('click', (e: MouseEvent) => {
+					e.stopPropagation();
+
+					void (async () => {
+						if (index === pastelColors.length - 1) {
+							// Remove color - required to reset dynamically applied background color
+							// eslint-disable-next-line obsidianmd/no-static-styles-assignment
+							card.style.backgroundColor = '';
+							delete this.plugin.data.noteColors[file.path];
+						} else {
+							// Apply color using CSS variable
+							card.style.backgroundColor = color;
+							// Store the CSS variable name so it adapts to theme changes
+							this.plugin.data.noteColors[file.path] = color;
+						}
+
+						await this.plugin.savePluginData();
+						this.closeAllColorDropdowns();
+					})();
+				});
+			});
+
+			// Toggle dropdown on click
+			colorBtn.addEventListener('click', (e: MouseEvent) => {
+				e.stopPropagation();
+				const shouldOpen = !colorDropdown.hasClass('show');
+				this.closeAllColorDropdowns(colorDropdown);
+				colorDropdown.toggleClass('show', shouldOpen);
+				this.activeColorDropdown = shouldOpen ? colorDropdown : null;
+			});
+
+			// Close dropdown when clicking outside
+			card.addEventListener('click', () => {
+				if (this.activeColorDropdown === colorDropdown) {
 					this.closeAllColorDropdowns();
-				})();
+				}
 			});
-		});
-		
-		// Toggle dropdown on click
-		colorBtn.addEventListener('click', (e: MouseEvent) => {
-			e.stopPropagation();
-			const shouldOpen = !colorDropdown.hasClass('show');
-			this.closeAllColorDropdowns(colorDropdown);
-			colorDropdown.toggleClass('show', shouldOpen);
-			this.activeColorDropdown = shouldOpen ? colorDropdown : null;
-		});
-		
-		// Close dropdown when clicking outside
-		card.addEventListener('click', () => {
-			if (this.activeColorDropdown === colorDropdown) {
-				this.closeAllColorDropdowns();
+
+			// Card header with file info
+			const cardHeader = card.createDiv({ cls: 'card-header' });
+
+			// Title
+			const title = cardHeader.createEl('h3', {
+				text: file.basename,
+				cls: 'card-title'
+			});
+			title.setAttribute('title', file.basename);
+
+			// Card content (preview) - render with Obsidian's markdown renderer
+			const cardContent = card.createDiv({ cls: 'card-content' });
+			if (previewText.trim()) {
+				const previewContainer = cardContent.createDiv({ cls: 'card-preview' });
+				// Render markdown natively with Obsidian's renderer
+				await MarkdownRenderer.render(
+					this.app,
+					previewText,
+					previewContainer,
+					file.path,
+					this
+				);
+
+				// Apply search highlighting for simple text searches
+				if (this.filterSearch && isSimpleTextSearch(this.filterSearch)) {
+					const cleanQuery = getCleanQuery(this.filterSearch);
+					if (cleanQuery) {
+						highlightSearchTerms(title, cleanQuery);
+						highlightSearchTerms(previewContainer, cleanQuery);
+					}
+				}
+			} else {
+				cardContent.createEl('p', {
+					text: 'Empty note...',
+					cls: 'card-preview card-preview-empty'
+				});
 			}
-		});
 
-		// Card header with file info
-		const cardHeader = card.createDiv({ cls: 'card-header' });
+			// Card footer with metadata
+			const cardFooter = card.createDiv({ cls: 'card-footer' });
 
-		// Title
-		const title = cardHeader.createEl('h3', {
-			text: file.basename,
-			cls: 'card-title'
-		});
-		title.setAttribute('title', file.basename);
-
-		// Card content (preview) - render with Obsidian's markdown renderer
-		const cardContent = card.createDiv({ cls: 'card-content' });
-		if (previewText.trim()) {
-			const previewContainer = cardContent.createDiv({ cls: 'card-preview' });
-			// Render markdown natively with Obsidian's renderer
-			await MarkdownRenderer.render(
-				this.app,
-				previewText,
-				previewContainer,
-				file.path,
-				this
-			);
-			
-			// Apply search highlighting for simple text searches
-			if (this.filterSearch && isSimpleTextSearch(this.filterSearch)) {
-				const cleanQuery = getCleanQuery(this.filterSearch);
-				if (cleanQuery) {
-					highlightSearchTerms(title, cleanQuery);
-					highlightSearchTerms(previewContainer, cleanQuery);
+			// Tags on left
+			const tagsContainer = cardFooter.createDiv({ cls: 'card-tags' });
+			const tags = extractTags(content);
+			if (tags.length > 0) {
+				tags.slice(0, 3).forEach(tag => {
+					tagsContainer.createSpan({ cls: 'card-tag', text: tag });
+				});
+				if (tags.length > 3) {
+					tagsContainer.createSpan({ cls: 'card-tag-more', text: `+${tags.length - 3}` });
 				}
 			}
-		} else {
-			cardContent.createEl('p', {
-				text: 'Empty note...',
-				cls: 'card-preview card-preview-empty'
+
+			// Date on right
+			const dateSpan = cardFooter.createSpan({ cls: 'card-date' });
+			dateSpan.createSpan({ text: formatDate(file.stat.mtime) });
+
+			// Middle-click handler to delete the note
+			card.addEventListener('auxclick', async (e: MouseEvent) => {
+				if (e.button === 1) { // Middle click button
+					e.preventDefault();
+					try {
+						// Save to undo stack before trashing
+						const contentToSave = await this.app.vault.read(file);
+						this.deletedNotesStack.push({ path: file.path, content: contentToSave });
+					} catch (err) {
+						console.error('Could not save note content for undo', err);
+					}
+
+					await this.app.fileManager.trashFile(file);
+					// Trigger immediate layout refresh instead of waiting 1 second for the vault event debouncer
+					void this.renderCards();
+				}
 			});
-		}
 
-		// Card footer with metadata
-		const cardFooter = card.createDiv({ cls: 'card-footer' });
-
-		// Tags on left
-		const tagsContainer = cardFooter.createDiv({ cls: 'card-tags' });
-		const tags = extractTags(content);
-		if (tags.length > 0) {
-			tags.slice(0, 3).forEach(tag => {
-				tagsContainer.createSpan({ cls: 'card-tag', text: tag });
+			// Left-click: open in a normal tab
+			card.addEventListener('click', (e: MouseEvent) => {
+				// Don't open if clicking action buttons, color dropdown, or during drag
+				if ((e.target as HTMLElement).closest('.card-pin-btn')) return;
+				if ((e.target as HTMLElement).closest('.card-color-btn')) return;
+				if ((e.target as HTMLElement).closest('.card-color-dropdown')) return;
+				const leaf = this.app.workspace.getLeaf('tab');
+				void leaf.openFile(file);
 			});
-			if (tags.length > 3) {
-				tagsContainer.createSpan({ cls: 'card-tag-more', text: `+${tags.length - 3}` });
-			}
-		}
-		
-		// Date on right
-		const dateSpan = cardFooter.createSpan({ cls: 'card-date' });
-		dateSpan.createSpan({ text: formatDate(file.stat.mtime) });
 
-		// Middle-click handler to delete the note
-		card.addEventListener('auxclick', async (e: MouseEvent) => {
-			if (e.button === 1) { // Middle click button
+			// Right-click: open inline overlay editor
+			card.addEventListener('contextmenu', (e: MouseEvent) => {
+				// Don't intercept right-clicks on action buttons
+				if ((e.target as HTMLElement).closest('.card-pin-btn')) return;
+				if ((e.target as HTMLElement).closest('.card-color-btn')) return;
+				if ((e.target as HTMLElement).closest('.card-color-dropdown')) return;
 				e.preventDefault();
-				try {
-					// Save to undo stack before trashing
-					const contentToSave = await this.app.vault.read(file);
-					this.deletedNotesStack.push({ path: file.path, content: contentToSave });
-				} catch (err) {
-					console.error('Could not save note content for undo', err);
-				}
-				
-				await this.app.fileManager.trashFile(file);
-				// Trigger immediate layout refresh instead of waiting 1 second for the vault event debouncer
-				void this.renderCards();
-			}
-		});
+				const overlay = new NoteEditorOverlay(this.app, file, this.contentEl);
+				void overlay.open();
+			});
 
-		// Left-click: open in a normal tab
-		card.addEventListener('click', (e: MouseEvent) => {
-			// Don't open if clicking action buttons, color dropdown, or during drag
-			if ((e.target as HTMLElement).closest('.card-pin-btn')) return;
-			if ((e.target as HTMLElement).closest('.card-color-btn')) return;
-			if ((e.target as HTMLElement).closest('.card-color-dropdown')) return;
-			const leaf = this.app.workspace.getLeaf('tab');
-			void leaf.openFile(file);
-		});
-
-		// Right-click: open inline overlay editor
-		card.addEventListener('contextmenu', (e: MouseEvent) => {
-			// Don't intercept right-clicks on action buttons
-			if ((e.target as HTMLElement).closest('.card-pin-btn')) return;
-			if ((e.target as HTMLElement).closest('.card-color-btn')) return;
-			if ((e.target as HTMLElement).closest('.card-color-dropdown')) return;
-			e.preventDefault();
-			const overlay = new NoteEditorOverlay(this.app, file, this.contentEl);
-			void overlay.open();
-		});
-
-		// Drag and drop handlers
-		card.addEventListener('dragstart', (e: DragEvent) => this.handleDragStart(e, card));
-		card.addEventListener('dragend', (e: DragEvent) => this.handleDragEnd(e, card));
-		card.addEventListener('dragover', (e: DragEvent) => this.handleDragOver(e, card));
-		card.addEventListener('drop', (e: DragEvent) => void this.handleDrop(e, card));
+			// Drag and drop handlers
+			card.addEventListener('dragstart', (e: DragEvent) => this.handleDragStart(e, card));
+			card.addEventListener('dragend', (e: DragEvent) => this.handleDragEnd(e, card));
+			card.addEventListener('dragover', (e: DragEvent) => this.handleDragOver(e, card));
+			card.addEventListener('drop', (e: DragEvent) => void this.handleDrop(e, card));
 		} catch (error) {
 			console.warn(`Skipping card for ${file.path} due to error:`, error);
 			// Return null to skip this card entirely
@@ -871,6 +884,7 @@ export class VisualDashboardView extends ItemView {
 
 	// Drag and Drop Handlers
 	handleDragStart(e: DragEvent, card: HTMLElement) {
+		this.isDragging = true;
 		this.draggedCard = card;
 		this.dragOverTargetCard = null;
 		this.pendingDragTargetCard = null;
@@ -893,7 +907,17 @@ export class VisualDashboardView extends ItemView {
 		this.pendingDragTargetCard = null;
 		this.pendingDragClientY = null;
 		this.setDragOverTarget(null);
+
+		// Persist the reordered DOM.  We save here (not in handleDrop)
+		// because `drop` only fires when the mouse is released exactly
+		// on a card — releasing in a gap between cards skips `drop`
+		// entirely, silently losing the reorder.
+		// `dragEnd` ALWAYS fires, and by this point `dragover` has
+		// already rearranged the DOM, so the order is correct.
+		void this.persistCurrentOrder();
+
 		this.draggedCard = null;
+		this.isDragging = false;
 	}
 
 	handleDragOver(e: DragEvent, card: HTMLElement) {
@@ -925,32 +949,47 @@ export class VisualDashboardView extends ItemView {
 			this.dragFrameId = null;
 		}
 
+		// Apply final DOM reorder from the exact drop position
 		this.pendingDragTargetCard = targetCard;
 		this.pendingDragClientY = e.clientY;
 		this.applyPendingDragReorder();
 		this.setDragOverTarget(null);
 
+		// Order saving is handled in dragEnd (which always fires after drop).
+		// Here we only handle the special case of dragging across pin
+		// boundaries, which requires a full re-render.
 		const draggedPath = this.draggedCard.getAttribute('data-path');
-		if (!draggedPath) return;
+		const targetPath = targetCard.getAttribute('data-path');
+		if (draggedPath && targetPath) {
+			const draggedWasPinned = this.plugin.isPinned(draggedPath);
+			const targetIsPinned = this.plugin.isPinned(targetPath);
+			if (draggedWasPinned !== targetIsPinned) {
+				// persistCurrentOrder will be called by dragEnd, but we
+				// need the re-render to happen after the save completes.
+				await this.persistCurrentOrder();
+				await this.renderCards();
+			}
+		}
+	}
 
+	/**
+	 * Read the current card order from the DOM and persist it.
+	 * Called from dragEnd so it fires regardless of whether
+	 * the mouse was released on a card or in a gap between cards.
+	 */
+	private async persistCurrentOrder() {
 		const currentOrder = this.getCurrentCardOrder();
 		if (currentOrder.length === 0) return;
 
-		const previousOrder = this.currentFiles.map(file => file.path);
-		if (currentOrder.length === previousOrder.length && currentOrder.every((path, index) => path === previousOrder[index])) {
-			return;
+		// Cancel any pending debounced refresh so it doesn't overwrite
+		// our just-saved order with a stale render.
+		if (this.refreshTimeoutId !== null) {
+			window.clearTimeout(this.refreshTimeoutId);
+			this.refreshTimeoutId = null;
 		}
-
-		const draggedWasPinned = this.plugin.isPinned(draggedPath);
-		const targetPath = targetCard.getAttribute('data-path');
-		const targetIsPinned = targetPath ? this.plugin.isPinned(targetPath) : draggedWasPinned;
 
 		await this.plugin.updateOrder(currentOrder);
 		this.syncCurrentFilesFromOrder(currentOrder);
-
-		if (draggedWasPinned !== targetIsPinned) {
-			await this.renderCards();
-		}
 	}
 
 	private setDragOverTarget(card: HTMLElement | null) {
@@ -1012,8 +1051,8 @@ export class VisualDashboardView extends ItemView {
 			.filter((file): file is TFile => file !== undefined);
 	}
 
-async onClose() {
-		
+	async onClose() {
+
 		// Event cleanup handled automatically by registerEvent
 		this.contentEl.empty();
 	}
