@@ -117,20 +117,24 @@ export function getSearchSuggestions(query: string, allTags: string[], allFolder
 		};
 		
 		const usedColors = new Set<string>();
-		Object.values(noteColors).forEach(colorValue => {
-			for (const [key] of Object.entries(colorMap)) {
+		for (const path of Object.keys(noteColors)) {
+			const colorValue = noteColors[path];
+			if (!colorValue) continue;
+
+			for (const key of Object.keys(colorMap)) {
 				if (colorValue.includes(key)) {
 					usedColors.add(key);
 				}
 			}
-		});
-		
+		}
+
 		const colorPrefix = lastWord.substring(6).toLowerCase();
 		const availableColors: Array<{key: string, display: string, value: string}> = [];
-		
+
 		// Add used colors
-		for (const [key, displayName] of Object.entries(colorMap)) {
+		for (const key of Object.keys(colorMap)) {
 			if (usedColors.has(key)) {
+				const displayName = colorMap[key] ?? key;
 				const searchKey = displayToSearchKey[displayName] || key.replace('pastel-', '');
 				if (displayName.toLowerCase().startsWith(colorPrefix) || searchKey.startsWith(colorPrefix)) {
 					availableColors.push({
