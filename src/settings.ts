@@ -105,7 +105,7 @@ export class MiniNotesSettingTab extends PluginSettingTab {
 					// Show/hide custom color picker
 					const colorSetting = containerEl.querySelector('.custom-color-setting') as HTMLElement;
 					if (colorSetting) {
-						colorSetting.style.display = value === 'custom' ? 'flex' : 'none';
+						colorSetting.toggleClass('is-hidden', value !== 'custom');
 					}
 				});
 			});
@@ -123,50 +123,22 @@ export class MiniNotesSettingTab extends PluginSettingTab {
 		
 		// Set initial visibility of custom color setting
 		customColorSetting.settingEl.addClass('custom-color-setting');
-		customColorSetting.settingEl.style.display = this.plugin.data.themeColor === 'custom' ? 'flex' : 'none';
+		customColorSetting.settingEl.toggleClass('is-hidden', this.plugin.data.themeColor !== 'custom');
 
 		// Footer with GitHub link
-		const footer = containerEl.createDiv();
-		// Required for proper footer spacing and layout - CSS classes not available for settings footer
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		footer.style.borderTop = 'none';
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		footer.style.paddingTop = '1em';
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		footer.style.background = 'none';
-		
-		const footerContent = footer.createDiv();
-		// Required for proper footer content layout - CSS classes not available for settings footer
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		footerContent.style.display = 'flex';
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		footerContent.style.alignItems = 'center';
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		footerContent.style.gap = '0.5em';
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		footerContent.style.fontSize = '0.7em';
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		footerContent.style.color = 'var(--text-muted)';
-		
+		const footer = containerEl.createDiv({ cls: 'mini-notes-settings-footer' });
+		const footerContent = footer.createDiv({ cls: 'mini-notes-settings-footer-content' });
+
 		footerContent.createSpan({ text: 'Built by ' });
-		
+
 		const link = footerContent.createEl('a', {
 			text: 'Rknastenka.com',
-			href: 'https://rknastenka.com'
+			href: 'https://rknastenka.com',
+			cls: 'mini-notes-settings-footer-link'
 		});
-		// Required to match footer text color - CSS classes not available for settings footer links
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		link.style.color = 'var(--text-muted)';
 		link.setAttribute('target', '_blank');
-		
-		const githubIcon = footerContent.createSpan();
-		// Required for proper icon display and interaction - CSS classes not available for settings footer icons
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		githubIcon.style.display = 'flex';
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		githubIcon.style.cursor = 'pointer';
-		// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-		githubIcon.style.marginLeft = '0.5em';
+
+		const githubIcon = footerContent.createSpan({ cls: 'mini-notes-settings-footer-github-icon' });
 		setIcon(githubIcon, 'github');
 		githubIcon.addEventListener('click', () => {
 			window.open('https://github.com/rknastenka/mini-notes', '_blank');

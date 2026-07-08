@@ -2,10 +2,10 @@ import { ItemView, TFile, WorkspaceLeaf, setIcon, MarkdownRenderer } from 'obsid
 import { NoteEditorOverlay } from './note-editor-overlay';
 import type VisualDashboardPlugin from './main';
 import { VIEW_TYPE_VISUAL_DASHBOARD } from './utils/types';
-import { extractTags, getPreviewText, stripMarkdown } from './utils/markdown';
+import { extractTags } from './utils/markdown';
 import { formatDate } from './utils/date';
 import { parseSearchOperators, getSearchSuggestions, filterFiles, isSimpleTextSearch, highlightSearchTerms, getCleanQuery, type SearchState } from './utils/search';
-import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH, CARD_SIZE, MAX_CARD_HEIGHT } from './utils/constants';
+import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH } from './utils/constants';
 
 export class VisualDashboardView extends ItemView {
 	private miniNotesGrid!: HTMLElement;
@@ -115,12 +115,12 @@ export class VisualDashboardView extends ItemView {
 		// Clear button
 		const clearBtn = searchWrapper.createDiv({ cls: 'search-clear-btn' });
 		setIcon(clearBtn, 'x');
-		clearBtn.style.display = this.filterSearch ? 'flex' : 'none';
+		clearBtn.toggleClass('is-hidden', !this.filterSearch);
 
 		clearBtn.addEventListener('click', () => {
 			searchInput.value = '';
 			this.filterSearch = '';
-			clearBtn.style.display = 'none';
+			clearBtn.addClass('is-hidden');
 			this.clearAllFilters();
 			void this.renderCards();
 		});
@@ -144,7 +144,7 @@ export class VisualDashboardView extends ItemView {
 		searchInput.addEventListener('input', (e) => {
 			const target = e.target as HTMLInputElement;
 			this.filterSearch = target.value;
-			clearBtn.style.display = target.value ? 'flex' : 'none';
+			clearBtn.toggleClass('is-hidden', !target.value);
 
 			// Show suggestions
 			this.updateSearchSuggestions(target.value);
@@ -156,7 +156,7 @@ export class VisualDashboardView extends ItemView {
 
 		// Close suggestions on blur
 		searchInput.addEventListener('blur', () => {
-			setTimeout(() => {
+			window.setTimeout(() => {
 				if (this.searchSuggestionsEl) {
 					this.searchSuggestionsEl.empty();
 					this.searchSuggestionsEl.removeClass('show');
@@ -197,8 +197,8 @@ export class VisualDashboardView extends ItemView {
 		// Create new note button
 		const createBtn = controls.createDiv({ cls: 'create-note-btn', attr: { 'aria-label': 'Create new mini note' } });
 		setIcon(createBtn, 'plus');
-		createBtn.addEventListener('click', async () => {
-			await this.plugin.createMiniNote();
+		createBtn.addEventListener('click', () => {
+			void this.plugin.createMiniNote();
 		});
 
 		// Create mini notes grid container
@@ -236,7 +236,7 @@ export class VisualDashboardView extends ItemView {
 		);
 
 		// Handle Ctrl+Z / Cmd+Z for undoing deletions
-		this.registerDomEvent(document, 'keydown', async (e: KeyboardEvent) => {
+		this.registerDomEvent(activeDocument, 'keydown', async (e: KeyboardEvent) => {
 			// Only handle if this view is the active one in the workspace
 			if (this.app.workspace.getActiveViewOfType(VisualDashboardView) !== this) return;
 
@@ -376,17 +376,17 @@ export class VisualDashboardView extends ItemView {
 
 		const clearBtn = this.contentEl.querySelector('.search-clear-btn') as HTMLElement;
 		if (clearBtn) {
-			clearBtn.style.display = 'none';
+			clearBtn.addClass('is-hidden');
 		}
 
-		const pinToggle = this.contentEl.querySelector('.filter-icon[aria-label*=\"pinned\"]') as HTMLElement;
+		const pinToggle = this.contentEl.querySelector('.filter-icon[aria-label*="pinned"]') as HTMLElement;
 		if (pinToggle) {
 			pinToggle.removeClass('active');
 		}
 
 		const filterChipsContainer = this.contentEl.querySelector('.filter-chips-container') as HTMLElement;
 		if (filterChipsContainer) {
-			filterChipsContainer.style.display = 'none';
+			filterChipsContainer.addClass('is-hidden');
 		}
 	}
 
@@ -414,7 +414,7 @@ export class VisualDashboardView extends ItemView {
 			case 'obsidian':
 			default:
 				// Use Obsidian's interactive accent color
-				themeColor = getComputedStyle(document.body).getPropertyValue('--interactive-accent').trim();
+				themeColor = getComputedStyle(activeDocument.body).getPropertyValue('--interactive-accent').trim();
 				break;
 		}
 
@@ -539,9 +539,9 @@ export class VisualDashboardView extends ItemView {
 				};
 
 				// @ts-ignore - View Transitions API
-				if (document.startViewTransition) {
+				if (activeDocument.startViewTransition) {
 					// @ts-ignore
-					document.startViewTransition(() => applyEmpty());
+					activeDocument.startViewTransition(() => applyEmpty());
 				} else {
 					applyEmpty();
 				}
@@ -552,7 +552,7 @@ export class VisualDashboardView extends ItemView {
 
 			// Check if we need sections (both pinned and unpinned exist)
 			const needsSections = pinnedFiles.length > 0 && unpinnedFiles.length > 0;
-			const fragment = document.createDocumentFragment();
+			const fragment = activeDocument.createDocumentFragment();
 
 			if (needsSections) {
 				// Render pinned section
@@ -590,9 +590,9 @@ export class VisualDashboardView extends ItemView {
 			};
 
 			// @ts-ignore - Document View Transitions API
-			if (document.startViewTransition) {
+			if (activeDocument.startViewTransition) {
 				// @ts-ignore
-				document.startViewTransition(() => applyDOM());
+				activeDocument.startViewTransition(() => applyDOM());
 			} else {
 				applyDOM();
 			}
@@ -610,8 +610,63 @@ export class VisualDashboardView extends ItemView {
 		}
 	}
 
+	/**
+	 * Move a card between the pinned/unpinned sections after a pin toggle without
+	 * re-reading files or re-rendering markdown for the whole grid — renderCards()
+	 * does that for every card and made pin/unpin visibly slow.
+	 */
+	private repositionCardAfterPinToggle(file: TFile, card: HTMLElement) {
+		const sortByOrder = (a: TFile, b: TFile) => {
+			const aOrder = this.plugin.getOrderIndex(a.path);
+			const bOrder = this.plugin.getOrderIndex(b.path);
+			if (aOrder > -1 && bOrder > -1) return aOrder - bOrder;
+			if (aOrder > -1) return -1;
+			if (bOrder > -1) return 1;
+			return b.stat.mtime - a.stat.mtime;
+		};
+
+		const pinnedFiles = this.currentFiles.filter(f => this.plugin.isPinned(f.path)).sort(sortByOrder);
+		const unpinnedFiles = this.currentFiles.filter(f => !this.plugin.isPinned(f.path)).sort(sortByOrder);
+		this.currentFiles = [...pinnedFiles, ...unpinnedFiles];
+
+		// Snapshot the already-rendered card elements so we can move them instead of recreating them.
+		const cardsByPath = new Map<string, HTMLElement>();
+		this.miniNotesGrid.querySelectorAll('.dashboard-card[data-path]').forEach(el => {
+			const path = el.getAttribute('data-path');
+			if (path) cardsByPath.set(path, el as HTMLElement);
+		});
+		cardsByPath.set(file.path, card);
+
+		const appendGroup = (grid: HTMLElement, groupFiles: TFile[]) => {
+			groupFiles.forEach((f, idx) => {
+				const el = cardsByPath.get(f.path);
+				if (el) {
+					el.setAttribute('data-index', idx.toString());
+					grid.appendChild(el);
+				}
+			});
+		};
+
+		const needsSections = pinnedFiles.length > 0 && unpinnedFiles.length > 0;
+		const fragment = activeDocument.createDocumentFragment();
+
+		if (needsSections) {
+			const pinnedGrid = fragment.createEl('div', { cls: 'mini-notes-grid-section' });
+			appendGroup(pinnedGrid, pinnedFiles);
+			fragment.createEl('div', { cls: 'section-separator' });
+			const notesGrid = fragment.createEl('div', { cls: 'mini-notes-grid-section' });
+			appendGroup(notesGrid, unpinnedFiles);
+		} else {
+			const singleGrid = fragment.createEl('div', { cls: 'mini-notes-grid-section' });
+			appendGroup(singleGrid, [...pinnedFiles, ...unpinnedFiles]);
+		}
+
+		this.miniNotesGrid.empty();
+		this.miniNotesGrid.appendChild(fragment);
+	}
+
 	async createCard(file: TFile, index: number): Promise<HTMLElement | null> {
-		const card = document.createElement('div');
+		const card = activeDocument.createElement('div');
 		card.addClass('dashboard-card');
 		card.setAttribute('data-path', file.path);
 		card.setAttribute('data-index', index.toString());
@@ -624,8 +679,6 @@ export class VisualDashboardView extends ItemView {
 		try {
 			// Get content and preview
 			const content = await this.app.vault.cachedRead(file);
-			const cleanContent = stripMarkdown(content);
-			const previewLength = Math.min(cleanContent.length, MAX_PREVIEW_LENGTH);
 
 			// Truncate raw content for preview (keep markdown formatting for proper rendering)
 			let previewText = content;
@@ -667,7 +720,7 @@ export class VisualDashboardView extends ItemView {
 				tempLine = tempLine.replace(/^#[a-zA-Z][a-zA-Z0-9_-]*/g, '');
 
 				// Restore inline code
-				tempLine = tempLine.replace(/\u200B(\d+)\u200B/g, (_, idx) => inlineCodeParts[parseInt(idx)] || '');
+				tempLine = tempLine.replace(/\u200B(\d+)\u200B/g, (_: string, idx: string) => inlineCodeParts[parseInt(idx)] || '');
 
 				return tempLine;
 			});
@@ -685,22 +738,16 @@ export class VisualDashboardView extends ItemView {
 				card.style.backgroundColor = savedColor;
 			}
 
-			// Apply max height limit
-			card.style.maxHeight = `${MAX_CARD_HEIGHT}px`;
-			// Required to prevent card content from exceeding max height - dynamic styling needed per card
-			// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-			card.style.overflow = 'hidden';
-
 			// Pin button (shows on hover)
 			const pinBtn = card.createDiv({ cls: 'card-pin-btn' + (isPinned ? ' pinned' : '') });
 			setIcon(pinBtn, 'pin');
 			pinBtn.setAttribute('aria-label', isPinned ? 'Unpin note' : 'Pin note');
 			pinBtn.addEventListener('click', (e: MouseEvent) => {
 				e.stopPropagation();
-				void this.plugin.togglePin(file.path).then(async (nowPinned) => {
+				void this.plugin.togglePin(file.path).then((nowPinned) => {
 					pinBtn.classList.toggle('pinned', nowPinned);
 					card.classList.toggle('card-pinned', nowPinned);
-					await this.renderCards();
+					this.repositionCardAfterPinToggle(file, card);
 				});
 			});
 
@@ -739,9 +786,8 @@ export class VisualDashboardView extends ItemView {
 
 					void (async () => {
 						if (index === pastelColors.length - 1) {
-							// Remove color - required to reset dynamically applied background color
-							// eslint-disable-next-line obsidianmd/no-static-styles-assignment
-							card.style.backgroundColor = '';
+							// Remove color
+							card.style.removeProperty('background-color');
 							delete this.plugin.data.noteColors[file.path];
 						} else {
 							// Apply color using CSS variable
@@ -830,20 +876,22 @@ export class VisualDashboardView extends ItemView {
 			dateSpan.createSpan({ text: formatDate(file.stat.mtime) });
 
 			// Middle-click handler to delete the note
-			card.addEventListener('auxclick', async (e: MouseEvent) => {
+			card.addEventListener('auxclick', (e: MouseEvent) => {
 				if (e.button === 1) { // Middle click button
 					e.preventDefault();
-					try {
-						// Save to undo stack before trashing
-						const contentToSave = await this.app.vault.read(file);
-						this.deletedNotesStack.push({ path: file.path, content: contentToSave });
-					} catch (err) {
-						console.error('Could not save note content for undo', err);
-					}
+					void (async () => {
+						try {
+							// Save to undo stack before trashing
+							const contentToSave = await this.app.vault.read(file);
+							this.deletedNotesStack.push({ path: file.path, content: contentToSave });
+						} catch (err) {
+							console.error('Could not save note content for undo', err);
+						}
 
-					await this.app.fileManager.trashFile(file);
-					// Trigger immediate layout refresh instead of waiting 1 second for the vault event debouncer
-					void this.renderCards();
+						await this.app.fileManager.trashFile(file);
+						// Trigger immediate layout refresh instead of waiting 1 second for the vault event debouncer
+						void this.renderCards();
+					})();
 				}
 			});
 

@@ -118,7 +118,7 @@ export function getSearchSuggestions(query: string, allTags: string[], allFolder
 		
 		const usedColors = new Set<string>();
 		Object.values(noteColors).forEach(colorValue => {
-			for (const [key, displayName] of Object.entries(colorMap)) {
+			for (const [key] of Object.entries(colorMap)) {
 				if (colorValue.includes(key)) {
 					usedColors.add(key);
 				}
@@ -207,7 +207,7 @@ export function highlightSearchTerms(element: HTMLElement, searchTerm: string): 
 	if (!searchTerm || searchTerm.trim().length === 0) return;
 	
 	const term = searchTerm.trim();
-	const walker = document.createTreeWalker(
+	const walker = activeDocument.createTreeWalker(
 		element,
 		NodeFilter.SHOW_TEXT,
 		null
@@ -242,18 +242,18 @@ export function highlightSearchTerms(element: HTMLElement, searchTerm: string): 
 			const match = text.substring(index, index + term.length);
 			const after = text.substring(index + term.length);
 			
-			const fragment = document.createDocumentFragment();
-			
-			if (before) fragment.appendChild(document.createTextNode(before));
-			
-			const mark = document.createElement('mark');
+			const fragment = activeDocument.createDocumentFragment();
+
+			if (before) fragment.appendChild(activeDocument.createTextNode(before));
+
+			const mark = activeDocument.createElement('mark');
 			mark.className = 'search-highlight';
 			mark.textContent = match;
 			fragment.appendChild(mark);
-			
+
 			if (after) {
 				// Recursively highlight remaining text
-				const afterNode = document.createTextNode(after);
+				const afterNode = activeDocument.createTextNode(after);
 				fragment.appendChild(afterNode);
 			}
 			
@@ -367,16 +367,19 @@ export function filterFiles(
 						// Supports: ![](document.pdf), ![[document.pdf]], [](document.pdf), [[document.pdf]]
 						if (!content.match(/!?\[.*?\]\([^)]*\.pdf[^)]*\)|!?\[\[[^\]]*\.pdf[^\]]*\]\]/i)) return false;
 						break;
-					case 'link':
+					case 'link': {
 						// Match links to pages, excluding images and PDFs
 						// Excludes: links with ! prefix (embeds) and links to image/PDF files
+						// Note: uses a captured non-'!' prefix instead of a negative lookbehind,
+						// since lookbehinds aren't supported on iOS versions before 16.4
 						const linkPattern = new RegExp(
-							'(?<!!)\\[.*?\\]\\((?![^)]*\\.(png|jpg|jpeg|gif|bmp|svg|webp|pdf)\\b)[^)]+\\)|' +
-							'(?<!!)\\[\\[(?![^\\]]*\\.(png|jpg|jpeg|gif|bmp|svg|webp|pdf)\\b)[^\\]]+\\]\\]',
+							'(?:^|[^!])(?:\\[.*?\\]\\((?![^)]*\\.(?:png|jpg|jpeg|gif|bmp|svg|webp|pdf)\\b)[^)]+\\)|' +
+							'\\[\\[(?![^\\]]*\\.(?:png|jpg|jpeg|gif|bmp|svg|webp|pdf)\\b)[^\\]]+\\]\\])',
 							'i'
 						);
 						if (!content.match(linkPattern)) return false;
 						break;
+					}
 					case 'list':
 						if (!content.match(/^\s*[-*+]\s|^\s*\d+\.\s/m)) return false;
 						break;

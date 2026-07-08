@@ -24,7 +24,7 @@ export class NoteEditorOverlay extends Component {
 		this.file = file;
 		this.mountEl = mountEl;
 		this.keydownHandler = (e: KeyboardEvent) => {
-			if (e.key === 'Escape') this.close();
+			if (e.key === 'Escape') void this.close();
 		};
 	}
 
@@ -52,14 +52,14 @@ export class NoteEditorOverlay extends Component {
 			);
 		}
 
-		document.addEventListener('keydown', this.keydownHandler);
+		activeDocument.addEventListener('keydown', this.keydownHandler);
 	}
 
 	private buildDOM() {
 		// --- Backdrop ---
 		this.backdropEl = this.mountEl.createDiv({ cls: 'neo-backdrop' });
 		this.backdropEl.addEventListener('mousedown', (e) => {
-			if (e.target === this.backdropEl) this.close();
+			if (e.target === this.backdropEl) void this.close();
 		});
 
 		// --- Overlay panel ---
@@ -72,13 +72,13 @@ export class NoteEditorOverlay extends Component {
 		this.buildBody();
 
 		// Animate in
-		requestAnimationFrame(() => {
+		window.requestAnimationFrame(() => {
 			this.backdropEl?.addClass('neo-visible');
 		});
 
 		// If edit mode was default, we'd focus it here, but we default to preview
 		if (this.mode === 'edit') {
-			setTimeout(() => this.textareaEl?.focus(), 60);
+			window.setTimeout(() => this.textareaEl?.focus(), 60);
 		}
 	}
 
@@ -100,23 +100,25 @@ export class NoteEditorOverlay extends Component {
 		const modeBtn = actions.createDiv({ cls: 'neo-btn', attr: { 'aria-label': 'Switch to edit' } });
 		setIcon(modeBtn, 'pencil');
 		modeBtn.addEventListener('click', () => {
-			this.toggleMode(modeBtn);
+			void this.toggleMode(modeBtn);
 		});
 
 		// Open in tab button
 		const openBtn = actions.createDiv({ cls: 'neo-btn', attr: { 'aria-label': 'Open in tab' } });
 		setIcon(openBtn, 'external-link');
-		openBtn.addEventListener('click', async () => {
-			await this.saveNow();
-			const leaf = this.app.workspace.getLeaf('tab');
-			await leaf.openFile(this.file);
-			this.close();
+		openBtn.addEventListener('click', () => {
+			void (async () => {
+				await this.saveNow();
+				const leaf = this.app.workspace.getLeaf('tab');
+				await leaf.openFile(this.file);
+				await this.close();
+			})();
 		});
 
 		// Close button
 		const closeBtn = actions.createDiv({ cls: 'neo-btn neo-btn-close', attr: { 'aria-label': 'Close' } });
 		setIcon(closeBtn, 'x');
-		closeBtn.addEventListener('click', () => this.close());
+		closeBtn.addEventListener('click', () => void this.close());
 	}
 
 	private buildBody() {
@@ -127,7 +129,7 @@ export class NoteEditorOverlay extends Component {
 		this.textareaEl.value = this.currentContent;
 		this.textareaEl.spellcheck = false;
 		this.textareaEl.setAttribute('placeholder', 'Start writing...');
-		this.textareaEl.style.display = 'none';
+		this.textareaEl.addClass('neo-hidden');
 
 		this.textareaEl.addEventListener('input', () => {
 			this.currentContent = this.textareaEl!.value;
@@ -136,14 +138,13 @@ export class NoteEditorOverlay extends Component {
 
 		// --- Preview container (preview mode) ---
 		this.previewEl = body.createDiv({ cls: 'neo-preview markdown-rendered' });
-		this.previewEl.style.display = '';
 
 		// Sync checkbox toggles in preview mode back to the source content
 		this.previewEl.addEventListener('click', (e: MouseEvent) => {
 			const target = e.target as HTMLElement;
 			if (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'checkbox' && target.classList.contains('task-list-item-checkbox')) {
-				
-				setTimeout(() => {
+
+				window.setTimeout(() => {
 					const li = target.closest('li');
 					let lineIdx = -1;
 					const lines = this.currentContent.split('\n');
@@ -189,8 +190,8 @@ export class NoteEditorOverlay extends Component {
 			this.mode = 'preview';
 			setIcon(modeBtn, 'pencil');
 			modeBtn.setAttribute('aria-label', 'Switch to edit');
-			this.textareaEl!.style.display = 'none';
-			this.previewEl!.style.display = '';
+			this.textareaEl!.addClass('neo-hidden');
+			this.previewEl!.removeClass('neo-hidden');
 			this.previewEl!.empty();
 			await MarkdownRenderer.render(
 				this.app,
@@ -204,8 +205,8 @@ export class NoteEditorOverlay extends Component {
 			this.mode = 'edit';
 			setIcon(modeBtn, 'eye');
 			modeBtn.setAttribute('aria-label', 'Toggle preview');
-			this.previewEl!.style.display = 'none';
-			this.textareaEl!.style.display = '';
+			this.previewEl!.addClass('neo-hidden');
+			this.textareaEl!.removeClass('neo-hidden');
 			this.textareaEl!.focus();
 		}
 	}
@@ -259,12 +260,12 @@ export class NoteEditorOverlay extends Component {
 			await this.saveNow();
 		}
 
-		document.removeEventListener('keydown', this.keydownHandler);
+		activeDocument.removeEventListener('keydown', this.keydownHandler);
 
 		// Animate out then remove
 		if (this.backdropEl) {
 			this.backdropEl.removeClass('neo-visible');
-			setTimeout(() => {
+			window.setTimeout(() => {
 				this.backdropEl?.remove();
 				this.backdropEl = null;
 				this.overlayEl = null;
