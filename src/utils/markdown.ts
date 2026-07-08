@@ -20,6 +20,11 @@ export function extractTags(content: string): string[] {
 	return tags;
 }
 
+// Remove a leading YAML frontmatter block from content
+export function stripYamlFrontmatter(content: string): string {
+	return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
+}
+
 // Strip markdown formatting from content
 export function stripMarkdown(content: string): string {
 	return content

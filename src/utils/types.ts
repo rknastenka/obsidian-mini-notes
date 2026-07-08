@@ -12,6 +12,7 @@ export interface DashboardData {
 	noteColors: Record<string, string>;
 	themeColor: 'obsidian' | 'black' | 'custom';
 	customThemeColor: string;
+	showYamlFrontmatter: boolean;
 }
 
 export const DEFAULT_DATA: DashboardData = {
@@ -23,5 +24,6 @@ export const DEFAULT_DATA: DashboardData = {
 	maxNotes: 150,
 	noteColors: {},
 	themeColor: 'obsidian',
-	customThemeColor: '#000000'
+	customThemeColor: '#000000',
+	showYamlFrontmatter: true
 };

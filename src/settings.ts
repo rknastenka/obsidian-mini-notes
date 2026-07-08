@@ -125,6 +125,18 @@ export class MiniNotesSettingTab extends PluginSettingTab {
 		customColorSetting.settingEl.addClass('custom-color-setting');
 		customColorSetting.settingEl.toggleClass('is-hidden', this.plugin.data.themeColor !== 'custom');
 
+		new Setting(containerEl)
+			.setName('Show YAML frontmatter')
+			.setDesc('Display the YAML frontmatter block in note previews')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.data.showYamlFrontmatter)
+				.onChange(async (value) => {
+					this.plugin.data.showYamlFrontmatter = value;
+					await this.plugin.savePluginData();
+					this.app.workspace.trigger('mini-notes:settings-changed');
+				})
+			);
+
 		// Footer with GitHub link
 		const footer = containerEl.createDiv({ cls: 'mini-notes-settings-footer' });
 		const footerContent = footer.createDiv({ cls: 'mini-notes-settings-footer-content' });

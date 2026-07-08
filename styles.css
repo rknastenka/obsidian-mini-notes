@@ -184,6 +184,10 @@
     color: var(--text-normal);
 }
 
+.search-clear-btn.is-hidden {
+    display: none;
+}
+
 .search-clear-btn svg {
     width: 14px;
     height: 14px;
@@ -241,6 +245,10 @@
     align-items: center;
     margin-bottom: 12px;
     padding: 8px 0;
+}
+
+.filter-chips-container.is-hidden {
+    display: none;
 }
 
 .filter-chip {
@@ -836,7 +844,7 @@
 
 /* Apply line clamp only to paragraphs and text elements, not code blocks */
 .card-preview > p,
-.card-preview > div:not(:has(pre)) {
+.card-preview > div:not(.has-code-block) {
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 15;
@@ -854,11 +862,17 @@
 }
 
 .card-preview .pdf-embed {
-    display: block;
+    /* Obsidian's own .pdf-embed rule is `display: flex; flex-direction: column`
+       (toolbar + .pdf-container, which flex-grows to fill the remaining height).
+       .pdf-container's scrollable viewer is absolutely positioned inset:0, so it
+       needs that flex layout to get a real height — display:block here would
+       collapse it and leave only a sliver of page 1 visible with no scroll. */
+    display: flex;
+    flex-direction: column;
     width: 100%;
     height: 400px;
-    overflow-y: auto !important;
-    overflow-x: auto;
+    max-height: 400px;
+    overflow: hidden;
     background-color: var(--background-secondary);
 }
 
@@ -868,17 +882,6 @@
     display: block;
     border: 1px solid var(--background-modifier-border);
     border-radius: 4px;
-}
-
-.card-preview .pdf-embed iframe,
-.card-preview iframe[src$=".pdf"] {
-    width: 166.667%;
-    height: 200vh; 
-    border: none;
-    transform: scale(0.6);
-    transform-origin: 0 0;
-    display: block;
-    margin-bottom: -80vh;
 }
 
 /* PDF embeds and internal embeds for Overlay Editor (full size) */
@@ -891,7 +894,10 @@
 }
 
 .neo-preview .pdf-embed {
-    display: block;
+    /* See .card-preview .pdf-embed above — must stay flex for Obsidian's
+       internal PDF viewer layout to size and scroll correctly. */
+    display: flex;
+    flex-direction: column;
     width: 100%;
     max-width: 700px;
     height: auto;
@@ -900,10 +906,8 @@
     background-color: var(--background-primary);
     border: 1px solid var(--background-modifier-border);
     border-radius: 6px;
-    overflow-y: auto !important;
-    overflow-x: auto;
+    overflow: hidden;
     margin: 10px auto;
-    pointer-events: auto !important;
 }
 
 .neo-preview .internal-embed iframe {
@@ -912,15 +916,6 @@
     display: block;
     border: 1px solid var(--background-modifier-border);
     border-radius: 6px;
-    pointer-events: auto !important;
-}
-
-.neo-preview .pdf-embed iframe,
-.neo-preview iframe[src$=".pdf"] {
-    width: 100%;
-    height: 100%;
-    border: none;
-    display: block;
     pointer-events: auto !important;
 }
 
@@ -1254,6 +1249,11 @@
     color: var(--text-faint);
 }
 
+.neo-textarea.neo-hidden,
+.neo-preview.neo-hidden {
+    display: none;
+}
+
 /* Preview (preview mode) */
 .neo-preview {
     flex: 1;
@@ -1271,5 +1271,36 @@
 .neo-preview::-webkit-scrollbar-thumb {
     background: var(--background-modifier-border);
     border-radius: 2px;
+}
+
+/* ============================================
+   Settings tab
+   ============================================ */
+.custom-color-setting.is-hidden {
+    display: none;
+}
+
+.mini-notes-settings-footer {
+    border-top: none;
+    padding-top: 1em;
+    background: none;
+}
+
+.mini-notes-settings-footer-content {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    font-size: 0.7em;
+    color: var(--text-muted);
+}
+
+.mini-notes-settings-footer-link {
+    color: var(--text-muted);
+}
+
+.mini-notes-settings-footer-github-icon {
+    display: flex;
+    cursor: pointer;
+    margin-left: 0.5em;
 }
 

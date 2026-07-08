@@ -2,7 +2,7 @@ import { ItemView, TFile, WorkspaceLeaf, setIcon, MarkdownRenderer } from 'obsid
 import { NoteEditorOverlay } from './note-editor-overlay';
 import type VisualDashboardPlugin from './main';
 import { VIEW_TYPE_VISUAL_DASHBOARD } from './utils/types';
-import { extractTags } from './utils/markdown';
+import { extractTags, stripYamlFrontmatter } from './utils/markdown';
 import { formatDate } from './utils/date';
 import { parseSearchOperators, getSearchSuggestions, filterFiles, isSimpleTextSearch, highlightSearchTerms, getCleanQuery, type SearchState } from './utils/search';
 import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH } from './utils/constants';
@@ -681,7 +681,9 @@ export class VisualDashboardView extends ItemView {
 			const content = await this.app.vault.cachedRead(file);
 
 			// Truncate raw content for preview (keep markdown formatting for proper rendering)
-			let previewText = content;
+			let previewText = this.plugin.data.showYamlFrontmatter
+				? content
+				: stripYamlFrontmatter(content);
 			if (content.length > MAX_PREVIEW_LENGTH) {
 				// Find a good break point (end of line) near the limit
 				const truncated = content.substring(0, MAX_PREVIEW_LENGTH);
@@ -840,6 +842,14 @@ export class VisualDashboardView extends ItemView {
 					file.path,
 					this
 				);
+
+				// Mark direct child divs containing code blocks so CSS can skip
+				// line-clamping them without relying on the costly :has() selector
+				Array.from(previewContainer.children).forEach((child) => {
+					if (child.tagName === 'DIV' && child.querySelector('pre')) {
+						child.classList.add('has-code-block');
+					}
+				});
 
 				// Apply search highlighting for simple text searches
 				if (this.filterSearch && isSimpleTextSearch(this.filterSearch)) {
