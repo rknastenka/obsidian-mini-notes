@@ -773,13 +773,13 @@ export class VisualDashboardView extends ItemView {
 
 			pastelColors.forEach((color, index) => {
 				const colorCircle = colorDropdown.createDiv({ cls: 'color-circle' });
-				colorCircle.style.backgroundColor = color;
 
 				// Last color is for removing
 				if (index === pastelColors.length - 1) {
 					colorCircle.addClass('color-circle-clear');
 					colorCircle.setAttribute('aria-label', 'Remove color');
 				} else {
+					colorCircle.style.backgroundColor = color;
 					colorCircle.setAttribute('aria-label', 'Apply color');
 				}
 
