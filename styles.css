@@ -148,7 +148,9 @@
     height: 14px;
 }
 
-.search-input {
+/* Obsidian's own input[type="text"] reset uses !important, so specificity
+   alone can't override it here */
+.search-wrapper .search-input {
     border: none !important;
     background: transparent !important;
     box-shadow: none !important;
@@ -160,7 +162,7 @@
     flex: 1;
 }
 
-.search-input:focus {
+.search-wrapper .search-input:focus {
     outline: none !important;
 }
 
@@ -656,7 +658,7 @@
 
 .card-color-dropdown .color-circle-clear {
     position: relative;
-    background: var(--background-secondary) !important;
+    background: var(--background-secondary);
 }
 
 .card-color-dropdown .color-circle-clear::before {
@@ -753,7 +755,7 @@
 }
 
 /* Code blocks and inline code in preview */
-.card-preview pre {
+.card-content .card-preview pre {
     background: var(--code-background);
     border: 1px solid var(--background-modifier-border);
     border-radius: 4px;
@@ -763,13 +765,13 @@
     font-size: 11px;
     line-height: 1.4;
     max-height: 300px;
-    display: block !important;
+    display: block;
 }
 
 /* Hide copy button in code blocks */
-.card-preview .copy-code-button,
-.card-preview button.copy-code-button {
-    display: none !important;
+.card-content .card-preview .copy-code-button,
+.card-content .card-preview button.copy-code-button {
+    display: none;
 }
 
 .card-preview code {
@@ -788,12 +790,12 @@
 }
 
 /* Tables in preview */
-.card-preview table {
+.card-content .card-preview table {
     border-collapse: collapse;
     width: 100%;
     margin: 8px 0;
     font-size: 11px;
-    display: table !important;
+    display: table;
 }
 
 .card-preview table th,
@@ -910,13 +912,13 @@
     margin: 10px auto;
 }
 
-.neo-preview .internal-embed iframe {
+.neo-body .neo-preview .internal-embed iframe {
     width: 100%;
     min-height: 400px;
     display: block;
     border: 1px solid var(--background-modifier-border);
     border-radius: 6px;
-    pointer-events: auto !important;
+    pointer-events: auto;
 }
 
 .card-preview-empty {
@@ -1086,7 +1088,7 @@
         font-size: 14px;
     }
     
-    .search-input {
+    .search-wrapper .search-input {
         font-size: 14px;
     }
     
