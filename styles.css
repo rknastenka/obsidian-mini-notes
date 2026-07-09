@@ -451,7 +451,10 @@
 }
 
 /* ============================================
-   Mini Notes Grid - CSS Columns (no gaps)
+   Mini Notes Grid - JS-driven masonry
+   (see src/utils/masonry.ts for column placement;
+   width breakpoints there must match the ones this
+   layout used to encode in @container queries)
    ============================================ */
 .mini-notes-grid {
     display: flex;
@@ -459,46 +462,9 @@
 }
 
 .mini-notes-grid-section {
-    column-count: 5;
-    column-gap: 12px;
+    position: relative;
     width: 100%;
     contain: layout style;
-}
-
-@container (min-width: 1400px) {
-    .mini-notes-grid-section {
-        column-count: 6;
-    }
-}
-
-@container (min-width: 1100px) and (max-width: 1399px) {
-    .mini-notes-grid-section {
-        column-count: 5;
-    }
-}
-
-@container (min-width: 800px) and (max-width: 1099px) {
-    .mini-notes-grid-section {
-        column-count: 4;
-    }
-}
-
-@container (min-width: 500px) and (max-width: 799px) {
-    .mini-notes-grid-section {
-        column-count: 3;
-    }
-}
-
-@container (min-width: 300px) and (max-width: 499px) {
-    .mini-notes-grid-section {
-        column-count: 2;
-    }
-}
-
-@container (max-width: 299px) {
-    .mini-notes-grid-section {
-        column-count: 1;
-    }
 }
 
 /* ============================================
@@ -506,17 +472,14 @@
    ============================================ */
 
 .dashboard-card {
-    position: relative;
+    position: absolute;
     background: var(--background-secondary);
     border: 1px solid var(--background-modifier-border);
     border-radius: 3px;
     padding: 10px 12px;
     cursor: pointer;
     transition: border-color 0.12s ease, transform 0.12s ease, opacity 0.12s ease, box-shadow 0.12s ease;
-    display: inline-block;
-    width: 100%;
-    break-inside: avoid;
-    margin-bottom: 12px;
+    margin: 0;
     max-height: 600px;
     overflow: hidden;
     will-change: transform;

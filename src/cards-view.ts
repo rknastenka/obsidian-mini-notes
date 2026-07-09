@@ -6,6 +6,7 @@ import { extractTags, stripYamlFrontmatter } from './utils/markdown';
 import { formatDate } from './utils/date';
 import { parseSearchOperators, getSearchSuggestions, filterFiles, isSimpleTextSearch, highlightSearchTerms, getCleanQuery, type SearchState } from './utils/search';
 import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH } from './utils/constants';
+import { layoutMasonrySection } from './utils/masonry';
 
 export class VisualDashboardView extends ItemView {
 	private miniNotesGrid!: HTMLElement;
@@ -20,6 +21,9 @@ export class VisualDashboardView extends ItemView {
 	private refreshTimeoutId: number | null = null;
 	private eventsRegistered = false;
 	private isDragging = false;
+	private cardHeightCache = new WeakMap<HTMLElement, number>();
+	private resizeObserver: ResizeObserver | null = null;
+	private relayoutFrameId: number | null = null;
 
 	// Filter state
 	private filterPinned: 'all' | 'pinned' | 'unpinned' = 'all';
@@ -212,6 +216,40 @@ export class VisualDashboardView extends ItemView {
 			this.setupEventListeners();
 			this.eventsRegistered = true;
 		}
+
+		// Recompute masonry column placement whenever the pane is resized
+		// (e.g. splitting/resizing the workspace) — width, not content, is
+		// what should ever change the column count.
+		if (!this.resizeObserver) {
+			this.resizeObserver = new ResizeObserver(() => this.scheduleMasonryRelayout());
+			this.resizeObserver.observe(this.contentEl);
+		}
+
+		// Embeds/images can grow a card after it's already been measured and
+		// placed; `load` doesn't bubble, so listen on the capture phase.
+		this.miniNotesGrid.addEventListener('load', (e) => {
+			const target = e.target as HTMLElement;
+			if (target.tagName !== 'IMG') return;
+			const card = target.closest<HTMLElement>('.dashboard-card');
+			if (card) this.cardHeightCache.delete(card);
+			this.scheduleMasonryRelayout();
+		}, true);
+	}
+
+	/** Lays out every `.mini-notes-grid-section` currently in the grid. */
+	private relayoutAllSections() {
+		this.miniNotesGrid.querySelectorAll<HTMLElement>('.mini-notes-grid-section').forEach(section => {
+			layoutMasonrySection(section, this.cardHeightCache);
+		});
+	}
+
+	/** rAF-throttled relayout for high-frequency triggers (resize, image loads). */
+	private scheduleMasonryRelayout() {
+		if (this.relayoutFrameId !== null) return;
+		this.relayoutFrameId = window.requestAnimationFrame(() => {
+			this.relayoutFrameId = null;
+			this.relayoutAllSections();
+		});
 	}
 
 	private setupEventListeners() {
@@ -587,6 +625,8 @@ export class VisualDashboardView extends ItemView {
 			const applyDOM = () => {
 				this.miniNotesGrid.empty();
 				this.miniNotesGrid.appendChild(fragment);
+				// Sections are only measurable once attached to the live DOM.
+				this.relayoutAllSections();
 			};
 
 			// @ts-ignore - Document View Transitions API
@@ -663,6 +703,7 @@ export class VisualDashboardView extends ItemView {
 
 		this.miniNotesGrid.empty();
 		this.miniNotesGrid.appendChild(fragment);
+		this.relayoutAllSections();
 	}
 
 	async createCard(file: TFile, index: number): Promise<HTMLElement | null> {
@@ -1093,6 +1134,11 @@ export class VisualDashboardView extends ItemView {
 				targetParent.insertBefore(draggedCard, nextSibling);
 			}
 		}
+
+		// Absolutely-positioned cards don't reflow on their own when DOM
+		// order changes — relayout to reflect the new order. Cached heights
+		// make this cheap (dragged card may have moved section, so cover all).
+		this.relayoutAllSections();
 	}
 
 	private getCurrentCardOrder(): string[] {
@@ -1112,6 +1158,12 @@ export class VisualDashboardView extends ItemView {
 	async onClose() {
 
 		// Event cleanup handled automatically by registerEvent
+		this.resizeObserver?.disconnect();
+		this.resizeObserver = null;
+		if (this.relayoutFrameId !== null) {
+			window.cancelAnimationFrame(this.relayoutFrameId);
+			this.relayoutFrameId = null;
+		}
 		this.contentEl.empty();
 	}
 }
