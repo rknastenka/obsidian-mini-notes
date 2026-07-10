@@ -1227,6 +1227,8 @@
     font-size: 14px;
     line-height: 1.6;
     color: var(--text-normal);
+    user-select: text;
+    -webkit-user-select: text;
 }
 
 .neo-preview::-webkit-scrollbar {

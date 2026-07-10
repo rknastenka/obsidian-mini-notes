@@ -1,4 +1,4 @@
-import { App, TFile, MarkdownRenderer, setIcon, Component } from 'obsidian';
+import { App, TFile, MarkdownRenderer, setIcon, Component, Menu } from 'obsidian';
 
 const AUTO_SAVE_DELAY_MS = 500;
 
@@ -182,6 +182,43 @@ export class NoteEditorOverlay extends Component {
 				}, 10);
 			}
 		}, { capture: true });
+
+		// Right-click: offer "Copy" for selected text and "Open in default browser" for links,
+		// since this bespoke preview div isn't a real Obsidian view and gets no native handling.
+		this.previewEl.addEventListener('contextmenu', (e: MouseEvent) => {
+			const target = e.target as HTMLElement;
+			const anchor = target.closest('a');
+			const isExternal = !!anchor?.classList.contains('external-link');
+			const selection = activeWindow.getSelection()?.toString() ?? '';
+
+			if (!(anchor && isExternal) && !selection) return;
+
+			e.preventDefault();
+			const menu = new Menu();
+
+			if (anchor && isExternal) {
+				const href = anchor.href;
+				menu.addItem((item) => item
+					.setTitle('Open in default browser')
+					.setIcon('external-link')
+					.onClick(() => window.open(href, '_blank')));
+				menu.addItem((item) => item
+					.setTitle('Copy link')
+					.setIcon('link')
+					.onClick(() => navigator.clipboard.writeText(href)));
+				this.app.workspace.trigger('url-menu', menu, href);
+				if (selection) menu.addSeparator();
+			}
+
+			if (selection) {
+				menu.addItem((item) => item
+					.setTitle('Copy')
+					.setIcon('copy')
+					.onClick(() => navigator.clipboard.writeText(selection)));
+			}
+
+			menu.showAtMouseEvent(e);
+		});
 	}
 
 	private async toggleMode(modeBtn: HTMLElement) {
