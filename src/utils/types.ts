@@ -10,6 +10,7 @@ export interface DashboardData {
 	createFolder: string;
 	maxNotes: number;
 	noteColors: Record<string, string>;
+	tagColors: Record<string, string>;
 	themeColor: 'obsidian' | 'black' | 'custom';
 	customThemeColor: string;
 	showYamlFrontmatter: boolean;
@@ -24,6 +25,7 @@ export const DEFAULT_DATA: DashboardData = {
 	createFolder: '/',
 	maxNotes: 150,
 	noteColors: {},
+	tagColors: {},
 	themeColor: 'obsidian',
 	customThemeColor: '#000000',
 	showYamlFrontmatter: true,

@@ -12,3 +12,12 @@ export const CARD_SIZE = {
 	SMALL: 100,
 	XS: 0
 } as const;
+
+export const PASTEL_SWATCHES = [
+	{ name: 'Peach', value: 'var(--pastel-peach)' },
+	{ name: 'Yellow', value: 'var(--pastel-yellow)' },
+	{ name: 'Green', value: 'var(--pastel-green)' },
+	{ name: 'Blue', value: 'var(--pastel-blue)' },
+	{ name: 'Purple', value: 'var(--pastel-purple)' },
+	{ name: 'Pink', value: 'var(--pastel-magenta)' }
+] as const;

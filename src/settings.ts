@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting, setIcon } from 'obsidian';
 import type VisualDashboardPlugin from './main';
+import { PASTEL_SWATCHES } from './utils/constants';
 
 export class MiniNotesSettingTab extends PluginSettingTab {
 	plugin: VisualDashboardPlugin;
@@ -92,7 +93,7 @@ export class MiniNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Maximum checklist items per card')
-			.setDesc('Maximum number of checklist items to show in a card before collapsing the rest into a "+N more" indicator. Set to 0 for no limit.')
+			.setDesc('Maximum number of checklist items to show in a card before collapsing extra items into a "+n more" indicator. Set to 0 for no limit.')
 			.addText(text => text
 				.setPlaceholder('8')
 				.setValue(String(this.plugin.data.maxChecklistItems))
@@ -152,6 +153,70 @@ export class MiniNotesSettingTab extends PluginSettingTab {
 				})
 			);
 
+		new Setting(containerEl)
+			.setName('Tag colors')
+			.setDesc('Automatically color a note based on its tags (e.g. #health → green). A manually chosen note color always takes priority; if a note has more than one mapped tag, whichever appears first in the note wins.')
+			.setHeading();
+
+		Object.entries(this.plugin.data.tagColors).forEach(([tag, color]) => {
+			new Setting(containerEl)
+				.setName(tag)
+				.addDropdown(dropdown => {
+					PASTEL_SWATCHES.forEach(swatch => {
+						dropdown.addOption(swatch.value, swatch.name);
+					});
+					dropdown.setValue(color);
+					dropdown.onChange(async (value) => {
+						this.plugin.data.tagColors[tag] = value;
+						await this.plugin.savePluginData();
+						this.app.workspace.trigger('mini-notes:settings-changed');
+					});
+				})
+				.addExtraButton(button => button
+					.setIcon('trash')
+					.setTooltip('Remove mapping')
+					.onClick(async () => {
+						delete this.plugin.data.tagColors[tag];
+						await this.plugin.savePluginData();
+						this.app.workspace.trigger('mini-notes:settings-changed');
+						this.display();
+					})
+				);
+		});
+
+		let newTagColorTag = '';
+		let newTagColorValue: string = PASTEL_SWATCHES[0].value;
+		new Setting(containerEl)
+			.setName('Add tag color')
+			.addText(text => text
+				.setPlaceholder('#tagname')
+				.onChange(value => {
+					newTagColorTag = value;
+				})
+			)
+			.addDropdown(dropdown => {
+				PASTEL_SWATCHES.forEach(swatch => {
+					dropdown.addOption(swatch.value, swatch.name);
+				});
+				dropdown.setValue(newTagColorValue);
+				dropdown.onChange(value => {
+					newTagColorValue = value;
+				});
+			})
+			.addButton(button => button
+				.setButtonText('Add')
+				.setCta()
+				.onClick(async () => {
+					const trimmed = newTagColorTag.trim();
+					if (!trimmed) return;
+					const tag = trimmed.startsWith('#') ? trimmed : '#' + trimmed;
+					this.plugin.data.tagColors[tag] = newTagColorValue;
+					await this.plugin.savePluginData();
+					this.app.workspace.trigger('mini-notes:settings-changed');
+					this.display();
+				})
+			);
+
 		// Footer with GitHub link
 		const footer = containerEl.createDiv({ cls: 'mini-notes-settings-footer' });
 		const footerContent = footer.createDiv({ cls: 'mini-notes-settings-footer-content' });
@@ -159,7 +224,7 @@ export class MiniNotesSettingTab extends PluginSettingTab {
 		footerContent.createSpan({ text: 'Built by ' });
 
 		const link = footerContent.createEl('a', {
-			text: 'rknastenka.com',
+			text: 'Rknastenka.com',
 			href: 'https://rknastenka.com',
 			cls: 'mini-notes-settings-footer-link'
 		});

@@ -5,7 +5,7 @@ import { VIEW_TYPE_VISUAL_DASHBOARD } from './utils/types';
 import { extractTags, stripYamlFrontmatter, getFrontmatterLineCount } from './utils/markdown';
 import { formatDate } from './utils/date';
 import { parseSearchOperators, getSearchSuggestions, applyStructuralFilters, applyContentFilters, isSimpleTextSearch, highlightSearchTerms, getCleanQuery, type SearchState } from './utils/search';
-import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH } from './utils/constants';
+import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH, PASTEL_SWATCHES } from './utils/constants';
 import { layoutMasonrySection } from './utils/masonry';
 
 export class VisualDashboardView extends ItemView {
@@ -730,6 +730,7 @@ export class VisualDashboardView extends ItemView {
 		try {
 			// Get content and preview
 			const content = await this.app.vault.cachedRead(file);
+			const tags = extractTags(content);
 
 			// Truncate raw content for preview (keep markdown formatting for proper rendering)
 			let previewText = this.plugin.data.showYamlFrontmatter
@@ -785,10 +786,19 @@ export class VisualDashboardView extends ItemView {
 				card.addClass('card-pinned');
 			}
 
-			// Apply saved color if exists
-			const savedColor = this.plugin.data.noteColors[file.path];
-			if (savedColor) {
-				card.style.backgroundColor = savedColor;
+			// Apply saved color if exists, falling back to the first matching tag color
+			let resolvedColor = this.plugin.data.noteColors[file.path];
+			if (!resolvedColor) {
+				for (const tag of tags) {
+					const mapped = this.plugin.data.tagColors[tag];
+					if (mapped) {
+						resolvedColor = mapped;
+						break;
+					}
+				}
+			}
+			if (resolvedColor) {
+				card.style.backgroundColor = resolvedColor;
 			}
 
 			// Pin button (shows on hover)
@@ -811,12 +821,7 @@ export class VisualDashboardView extends ItemView {
 
 			// Create color palette dropdown using CSS variables
 			const pastelColors = [
-				'var(--pastel-peach)',    // Peach
-				'var(--pastel-yellow)',   // Yellow
-				'var(--pastel-green)',    // Green
-				'var(--pastel-blue)',     // Blue
-				'var(--pastel-purple)',   // Purple
-				'var(--pastel-magenta)',  // Pink
+				...PASTEL_SWATCHES.map(swatch => swatch.value),
 				'var(--pastel-gray)'      // Gray (remove color)
 			];
 
@@ -953,7 +958,6 @@ export class VisualDashboardView extends ItemView {
 
 			// Tags on left
 			const tagsContainer = cardFooter.createDiv({ cls: 'card-tags' });
-			const tags = extractTags(content);
 			if (tags.length > 0) {
 				tags.slice(0, 3).forEach(tag => {
 					tagsContainer.createSpan({ cls: 'card-tag', text: tag });
