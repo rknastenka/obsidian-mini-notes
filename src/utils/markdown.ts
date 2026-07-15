@@ -6,7 +6,10 @@ export function extractTags(content: string): string[] {
 		.replace(/`[^`]*`/g, ''); // Remove inline code
 	
 	// Updated regex to support Unicode characters including emoticons/emoji
-	const tagRegex = /(?:^|\s)#([\p{L}\p{N}\p{Emoji}_-][\p{L}\p{N}\p{Emoji}_-]*)/gu;
+	// Note: \p{Extended_Pictographic} (not \p{Emoji}) - \p{Emoji} also matches
+	// plain ASCII digits, '#' and '*' (emoji keycap components), which would
+	// make a heading like "## Foo" match as tag "##".
+	const tagRegex = /(?:^|\s)#([\p{L}\p{N}\p{Extended_Pictographic}_-][\p{L}\p{N}\p{Extended_Pictographic}_-]*)/gu;
 	const tags: string[] = [];
 	let match;
 
@@ -41,7 +44,7 @@ export function stripMarkdown(content: string): string {
 		.replace(/^>\s+/gm, '') // Blockquotes
 		.replace(/^[-*+]\s+/gm, '') // List items
 		.replace(/^\d+\.\s+/gm, '') // Numbered lists
-		.replace(/(?:^|\s)#[\p{L}\p{N}\p{Emoji}_-]+/gu, '') // Remove tags (supports Unicode/emoji)
+		.replace(/(?:^|\s)#[\p{L}\p{N}\p{Extended_Pictographic}_-]+/gu, '') // Remove tags (supports Unicode/emoji)
 		.trim();
 }
 
