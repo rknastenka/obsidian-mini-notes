@@ -43,6 +43,11 @@ export class VisualDashboardView extends ItemView {
 	private deletedNotesStack: { path: string; content: string }[] = [];
 	private activeColorDropdown: HTMLElement | null = null;
 
+	// Serializes checkbox toggle read-modify-writes per file, so rapid
+	// tick/untick clicks can't race each other's vault.read/vault.modify
+	// and clobber one another's change.
+	private checkboxToggleQueues: Map<string, Promise<void>> = new Map();
+
 	constructor(leaf: WorkspaceLeaf, plugin: VisualDashboardPlugin) {
 		super(leaf);
 		this.plugin = plugin;
@@ -928,10 +933,12 @@ export class VisualDashboardView extends ItemView {
 					if (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'checkbox' && target.classList.contains('task-list-item-checkbox')) {
 						e.stopPropagation();
 						const checkbox = target as HTMLInputElement;
-						// Let the native checkbox `checked` state settle before reading it
-						window.setTimeout(() => {
-							void this.toggleCardCheckbox(file, checkbox);
-						}, 10);
+						const li = checkbox.closest('li');
+						if (!li) return;
+						// The browser flips `checked` before dispatching this click event,
+						// so capture the intended state now rather than after any delay -
+						// by the time a queued write runs, further clicks may have flipped it again.
+						this.queueCheckboxToggle(file, li, checkbox.checked);
 					}
 				}, { capture: true });
 			} else {
@@ -1015,12 +1022,27 @@ export class VisualDashboardView extends ItemView {
 		return card;
 	}
 
+	// Queue a checkbox toggle so it runs only after any previous toggle for the
+	// same file has fully completed. toggleCardCheckbox does a read-modify-write
+	// against the vault; without this queue, two toggles fired in quick succession
+	// (e.g. rapid tick/untick) can both read the file before either write lands,
+	// and the second write then clobbers the first one's change.
+	private queueCheckboxToggle(file: TFile, li: HTMLElement, isChecked: boolean): void {
+		const prevOp = this.checkboxToggleQueues.get(file.path) ?? Promise.resolve();
+		const thisOp = prevOp
+			.catch(() => {})
+			.then(() => this.toggleCardCheckbox(file, li, isChecked));
+		this.checkboxToggleQueues.set(file.path, thisOp);
+		void thisOp.finally(() => {
+			if (this.checkboxToggleQueues.get(file.path) === thisOp) {
+				this.checkboxToggleQueues.delete(file.path);
+			}
+		});
+	}
+
 	// Persist a checkbox toggle made in a card's preview back to the note file,
 	// so clicking a checkbox in the grid checks it instead of just opening the tab.
-	private async toggleCardCheckbox(file: TFile, checkbox: HTMLInputElement): Promise<void> {
-		const li = checkbox.closest('li');
-		if (!li) return;
-
+	private async toggleCardCheckbox(file: TFile, li: HTMLElement, isChecked: boolean): Promise<void> {
 		const checkboxLineRegex = /^\s*(?:[-*+]|\d+\.)\s+\[[ \-xX]\]/;
 
 		let previewLineIdx = -1;
@@ -1032,7 +1054,6 @@ export class VisualDashboardView extends ItemView {
 		try {
 			const freshContent = await this.app.vault.read(file);
 			const lines = freshContent.split('\n');
-			const isChecked = checkbox.checked;
 			let lineIdx = -1;
 
 			if (previewLineIdx >= 0) {
