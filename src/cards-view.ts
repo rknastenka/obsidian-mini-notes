@@ -4,7 +4,7 @@ import type VisualDashboardPlugin from './main';
 import { VIEW_TYPE_VISUAL_DASHBOARD } from './utils/types';
 import { extractTags, stripYamlFrontmatter } from './utils/markdown';
 import { formatDate } from './utils/date';
-import { parseSearchOperators, getSearchSuggestions, filterFiles, isSimpleTextSearch, highlightSearchTerms, getCleanQuery, type SearchState } from './utils/search';
+import { parseSearchOperators, getSearchSuggestions, applyStructuralFilters, applyContentFilters, isSimpleTextSearch, highlightSearchTerms, getCleanQuery, type SearchState } from './utils/search';
 import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH } from './utils/constants';
 import { layoutMasonrySection } from './utils/masonry';
 
@@ -476,6 +476,25 @@ export class VisualDashboardView extends ItemView {
 			// Filter out config folder files to avoid reading plugin/config files
 			files = files.filter((file: TFile) => !file.path.startsWith(this.app.vault.configDir + '/'));
 
+			// Apply all filters using search module
+			const searchState: SearchState = {
+				query: this.filterSearch,
+				filterTag: this.filterTag,
+				filterPinned: this.filterPinned,
+				filterColors: this.filterColors,
+				filterFolder: this.filterFolder,
+				filterOperators: this.filterOperators
+			};
+
+			// Apply structural filters (folder/pinned/color) before the pool-size cutoff below,
+			// so the cutoff is scoped to the user's search instead of the whole vault
+			files = applyStructuralFilters(
+				files,
+				searchState,
+				(path) => this.plugin.isPinned(path),
+				(path) => this.plugin.data.noteColors[path]
+			);
+
 			// Sort by mtime but always retain files that are in the saved noteOrder
 			// so their custom position is never lost due to the pool size cutoff
 			const savedOrderSet = new Set(this.plugin.data.noteOrder);
@@ -512,23 +531,9 @@ export class VisualDashboardView extends ItemView {
 			});
 			this.allFolders = Array.from(folderSet).sort();
 
-			// Apply all filters using search module
-			const searchState: SearchState = {
-				query: this.filterSearch,
-				filterTag: this.filterTag,
-				filterPinned: this.filterPinned,
-				filterColors: this.filterColors,
-				filterFolder: this.filterFolder,
-				filterOperators: this.filterOperators
-			};
-
-			files = filterFiles(
-				files,
-				fileContents,
-				searchState,
-				(path) => this.plugin.isPinned(path),
-				(path) => this.plugin.data.noteColors[path]
-			);
+			// Apply remaining content-dependent filters (tag/text query/has:/type:)
+			// structural filters (folder/pinned/color) were already applied above
+			files = applyContentFilters(files, fileContents, searchState);
 
 			// Sort by custom order first, then limit — so custom-ordered notes aren't
 			// accidentally dropped by the slice before their position is evaluated

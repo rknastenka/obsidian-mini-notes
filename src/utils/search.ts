@@ -266,9 +266,10 @@ export function highlightSearchTerms(element: HTMLElement, searchTerm: string): 
 	});
 }
 
-export function filterFiles(
+// Filters that only need file path/metadata (no content read required): pinned, folder, color.
+// Safe to apply before any content-dependent pool truncation.
+export function applyStructuralFilters(
 	files: TFile[],
-	fileContents: Map<string, string>,
 	searchState: SearchState,
 	isPinned: (path: string) => boolean,
 	getNoteColor: (path: string) => string | undefined
@@ -280,15 +281,6 @@ export function filterFiles(
 		filtered = filtered.filter(f => isPinned(f.path));
 	} else if (searchState.filterPinned === 'unpinned') {
 		filtered = filtered.filter(f => !isPinned(f.path));
-	}
-
-	// Apply tag filter
-	if (searchState.filterTag) {
-		filtered = filtered.filter(f => {
-			const content = fileContents.get(f.path) || '';
-			const tags = extractTags(content);
-			return tags.includes(searchState.filterTag!);
-		});
 	}
 
 	// Apply folder filter
@@ -310,7 +302,7 @@ export function filterFiles(
 				if (filterColor === 'gray') {
 					return !savedColor;
 				}
-				
+
 				if (!savedColor) return false;
 
 				const colorMap: Record<string, string> = {
@@ -327,6 +319,26 @@ export function filterFiles(
 			});
 
 			return colorMatch;
+		});
+	}
+
+	return filtered;
+}
+
+// Filters that require file content: tag, text query, has:/type: operators.
+export function applyContentFilters(
+	files: TFile[],
+	fileContents: Map<string, string>,
+	searchState: SearchState
+): TFile[] {
+	let filtered = [...files];
+
+	// Apply tag filter
+	if (searchState.filterTag) {
+		filtered = filtered.filter(f => {
+			const content = fileContents.get(f.path) || '';
+			const tags = extractTags(content);
+			return tags.includes(searchState.filterTag!);
 		});
 	}
 
@@ -401,4 +413,19 @@ export function filterFiles(
 	}
 
 	return filtered;
+}
+
+// Convenience wrapper combining structural + content filters, kept for API stability.
+export function filterFiles(
+	files: TFile[],
+	fileContents: Map<string, string>,
+	searchState: SearchState,
+	isPinned: (path: string) => boolean,
+	getNoteColor: (path: string) => string | undefined
+): TFile[] {
+	return applyContentFilters(
+		applyStructuralFilters(files, searchState, isPinned, getNoteColor),
+		fileContents,
+		searchState
+	);
 }

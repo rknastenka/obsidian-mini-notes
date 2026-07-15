@@ -144,7 +144,7 @@ export class MiniNotesSettingTab extends PluginSettingTab {
 		footerContent.createSpan({ text: 'Built by ' });
 
 		const link = footerContent.createEl('a', {
-			text: 'Rknastenka.com',
+			text: 'rknastenka.com',
 			href: 'https://rknastenka.com',
 			cls: 'mini-notes-settings-footer-link'
 		});
