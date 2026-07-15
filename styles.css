@@ -807,6 +807,13 @@
     height: 14px;
 }
 
+.card-checklist-more {
+    font-size: 11px;
+    color: var(--text-faint);
+    margin-top: 2px;
+    padding-left: 20px;
+}
+
 /* Apply line clamp only to paragraphs and text elements, not code blocks */
 .card-preview > p,
 .card-preview > div:not(.has-code-block) {

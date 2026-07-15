@@ -897,6 +897,20 @@ export class VisualDashboardView extends ItemView {
 					}
 				});
 
+				// Cap the number of checklist items shown per card (Keep-style),
+				// since task lists aren't covered by the paragraph line-clamp above
+				// and a long checklist would otherwise grow the card unbounded.
+				const maxChecklistItems = this.plugin.data.maxChecklistItems;
+				const taskItems = Array.from(previewContainer.querySelectorAll('.task-list-item'));
+				if (maxChecklistItems > 0 && taskItems.length > maxChecklistItems) {
+					const hiddenCount = taskItems.length - maxChecklistItems;
+					taskItems.slice(maxChecklistItems).forEach((item) => item.remove());
+					previewContainer.createDiv({
+						cls: 'card-checklist-more',
+						text: `+${hiddenCount} more`
+					});
+				}
+
 				// Apply search highlighting for simple text searches
 				if (this.filterSearch && isSimpleTextSearch(this.filterSearch)) {
 					const cleanQuery = getCleanQuery(this.filterSearch);

@@ -13,6 +13,7 @@ export interface DashboardData {
 	themeColor: 'obsidian' | 'black' | 'custom';
 	customThemeColor: string;
 	showYamlFrontmatter: boolean;
+	maxChecklistItems: number;
 }
 
 export const DEFAULT_DATA: DashboardData = {
@@ -25,5 +26,6 @@ export const DEFAULT_DATA: DashboardData = {
 	noteColors: {},
 	themeColor: 'obsidian',
 	customThemeColor: '#000000',
-	showYamlFrontmatter: true
+	showYamlFrontmatter: true,
+	maxChecklistItems: 8
 };

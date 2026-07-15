@@ -91,6 +91,21 @@ export class MiniNotesSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName('Maximum checklist items per card')
+			.setDesc('Maximum number of checklist items to show in a card before collapsing the rest into a "+N more" indicator. Set to 0 for no limit.')
+			.addText(text => text
+				.setPlaceholder('8')
+				.setValue(String(this.plugin.data.maxChecklistItems))
+				.onChange(async (value) => {
+					const num = parseInt(value);
+					if (!isNaN(num) && num >= 0) {
+						this.plugin.data.maxChecklistItems = num;
+						await this.plugin.savePluginData();
+					}
+				})
+			);
+
+		new Setting(containerEl)
 			.setName('Theme color')
 			.setDesc('Color for borders, pins, and accents')
 			.addDropdown(dropdown => {
