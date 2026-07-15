@@ -2,7 +2,7 @@ import { ItemView, TFile, WorkspaceLeaf, setIcon, MarkdownRenderer } from 'obsid
 import { NoteEditorOverlay } from './note-editor-overlay';
 import type VisualDashboardPlugin from './main';
 import { VIEW_TYPE_VISUAL_DASHBOARD } from './utils/types';
-import { extractTags, stripYamlFrontmatter } from './utils/markdown';
+import { extractTags, stripYamlFrontmatter, getFrontmatterLineCount } from './utils/markdown';
 import { formatDate } from './utils/date';
 import { parseSearchOperators, getSearchSuggestions, applyStructuralFilters, applyContentFilters, isSimpleTextSearch, highlightSearchTerms, getCleanQuery, type SearchState } from './utils/search';
 import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH } from './utils/constants';
@@ -905,6 +905,21 @@ export class VisualDashboardView extends ItemView {
 						highlightSearchTerms(previewContainer, cleanQuery);
 					}
 				}
+
+				// Toggle checkboxes in place instead of opening an editor tab.
+				// Must run (and stop propagation) before the card's own click
+				// listener below, which opens the note in a new tab.
+				previewContainer.addEventListener('click', (e: MouseEvent) => {
+					const target = e.target as HTMLElement;
+					if (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'checkbox' && target.classList.contains('task-list-item-checkbox')) {
+						e.stopPropagation();
+						const checkbox = target as HTMLInputElement;
+						// Let the native checkbox `checked` state settle before reading it
+						window.setTimeout(() => {
+							void this.toggleCardCheckbox(file, checkbox);
+						}, 10);
+					}
+				}, { capture: true });
 			} else {
 				cardContent.createEl('p', {
 					text: 'Empty note...',
@@ -984,6 +999,60 @@ export class VisualDashboardView extends ItemView {
 		}
 
 		return card;
+	}
+
+	// Persist a checkbox toggle made in a card's preview back to the note file,
+	// so clicking a checkbox in the grid checks it instead of just opening the tab.
+	private async toggleCardCheckbox(file: TFile, checkbox: HTMLInputElement): Promise<void> {
+		const li = checkbox.closest('li');
+		if (!li) return;
+
+		const checkboxLineRegex = /^\s*(?:[-*+]|\d+\.)\s+\[[ \-xX]\]/;
+
+		let previewLineIdx = -1;
+		const lineStr = li.getAttribute('data-line');
+		if (lineStr !== null) {
+			previewLineIdx = parseInt(lineStr, 10);
+		}
+
+		try {
+			const freshContent = await this.app.vault.read(file);
+			const lines = freshContent.split('\n');
+			const isChecked = checkbox.checked;
+			let lineIdx = -1;
+
+			if (previewLineIdx >= 0) {
+				// data-line is relative to the rendered preview text, which strips
+				// YAML frontmatter when that setting is off - map it back to the
+				// real file's line numbering.
+				const offset = this.plugin.data.showYamlFrontmatter ? 0 : getFrontmatterLineCount(freshContent);
+				const candidate = previewLineIdx + offset;
+				const candidateLine = candidate >= 0 && candidate < lines.length ? lines[candidate] : undefined;
+				if (candidateLine !== undefined && checkboxLineRegex.test(candidateLine)) {
+					lineIdx = candidate;
+				}
+			}
+
+			if (lineIdx === -1) {
+				// Fallback: match by text content
+				let liText = li.textContent || '';
+				const firstLine = liText.trim().split('\n')[0];
+				liText = firstLine ? firstLine.trim() : '';
+				if (liText) {
+					lineIdx = lines.findIndex(l => checkboxLineRegex.test(l) && l.includes(liText));
+				}
+			}
+
+			if (lineIdx >= 0 && lineIdx < lines.length) {
+				const targetLine = lines[lineIdx];
+				if (targetLine !== undefined) {
+					lines[lineIdx] = targetLine.replace(/\[[ \-xX]\]/, isChecked ? '[x]' : '[ ]');
+					await this.app.vault.modify(file, lines.join('\n'));
+				}
+			}
+		} catch (err) {
+			console.error('Could not update checkbox state', err);
+		}
 	}
 
 	// Drag and Drop Handlers

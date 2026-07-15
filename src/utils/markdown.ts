@@ -28,6 +28,15 @@ export function stripYamlFrontmatter(content: string): string {
 	return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
 }
 
+// Number of lines a leading YAML frontmatter block occupies (0 if none).
+// Used to map line numbers from frontmatter-stripped preview text back to
+// their real position in the full file content.
+export function getFrontmatterLineCount(content: string): number {
+	const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+	if (!match) return 0;
+	return (match[0].match(/\n/g) || []).length;
+}
+
 // Strip markdown formatting from content
 export function stripMarkdown(content: string): string {
 	return content
