@@ -5,6 +5,7 @@ Review them later in a colorful Google Keep-style card-based view, where you can
 - view your notes in a google keep-notes similar layout
 - change the bg color of your notes!
 - pin your most important notes
+- shuffle the displayed notes instantly with the dice button
 - filter your notes based on their tags, folder, color, type.
 	- **Example:**    `folder:projects`  `color:yellow`   `tag:cs`
 

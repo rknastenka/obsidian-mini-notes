@@ -8,6 +8,7 @@ import { parseSearchOperators, getSearchSuggestions, applyStructuralFilters, app
 import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH, PASTEL_SWATCHES } from './utils/constants';
 import { layoutMasonrySection } from './utils/masonry';
 import { isPathExcluded, isPathInFolder } from './utils/paths';
+import { shuffleInPlace } from './utils/shuffle';
 
 export class VisualDashboardView extends ItemView {
 	private miniNotesGrid!: HTMLElement;
@@ -107,6 +108,18 @@ export class VisualDashboardView extends ItemView {
 
 		// Controls on right
 		const controls = header.createDiv({ cls: 'header-controls' });
+
+		// Shuffle visible notes without rereading or rerendering their content
+		const shuffleBtn = controls.createEl('button', {
+			cls: 'shuffle-notes-btn',
+			attr: {
+				'aria-label': 'Shuffle notes',
+				title: 'Shuffle notes',
+				type: 'button'
+			}
+		});
+		setIcon(shuffleBtn, 'dices');
+		shuffleBtn.addEventListener('click', () => this.shuffleDisplayedNotes());
 
 		// Search bar with autocomplete
 		const searchContainer = controls.createDiv({ cls: 'search-container' });
@@ -665,8 +678,24 @@ export class VisualDashboardView extends ItemView {
 	}
 
 	/**
+	 * Randomize the current display by moving existing card elements. This keeps
+	 * the action O(n) and avoids vault reads, Markdown rendering, and data writes.
+	 */
+	private shuffleDisplayedNotes() {
+		const pinnedFiles = this.currentFiles.filter(file => this.plugin.isPinned(file.path));
+		const unpinnedFiles = this.currentFiles.filter(file => !this.plugin.isPinned(file.path));
+
+		if (pinnedFiles.length < 2 && unpinnedFiles.length < 2) return;
+
+		shuffleInPlace(pinnedFiles);
+		shuffleInPlace(unpinnedFiles);
+		this.currentFiles = [...pinnedFiles, ...unpinnedFiles];
+		this.rebuildExistingCardGrid(pinnedFiles, unpinnedFiles);
+	}
+
+	/**
 	 * Move a card between the pinned/unpinned sections after a pin toggle without
-	 * re-reading files or re-rendering markdown for the whole grid — renderCards()
+	 * re-reading files or re-rendering markdown for the whole grid. renderCards()
 	 * does that for every card and made pin/unpin visibly slow.
 	 */
 	private repositionCardAfterPinToggle(file: TFile, card: HTMLElement) {
@@ -682,20 +711,28 @@ export class VisualDashboardView extends ItemView {
 		const pinnedFiles = this.currentFiles.filter(f => this.plugin.isPinned(f.path)).sort(sortByOrder);
 		const unpinnedFiles = this.currentFiles.filter(f => !this.plugin.isPinned(f.path)).sort(sortByOrder);
 		this.currentFiles = [...pinnedFiles, ...unpinnedFiles];
+		this.rebuildExistingCardGrid(pinnedFiles, unpinnedFiles, { file, card });
+	}
 
+	private rebuildExistingCardGrid(
+		pinnedFiles: TFile[],
+		unpinnedFiles: TFile[],
+		extraCard?: { file: TFile; card: HTMLElement }
+	) {
 		// Snapshot the already-rendered card elements so we can move them instead of recreating them.
 		const cardsByPath = new Map<string, HTMLElement>();
-		this.miniNotesGrid.querySelectorAll('.dashboard-card[data-path]').forEach(el => {
+		this.miniNotesGrid.querySelectorAll<HTMLElement>('.dashboard-card[data-path]').forEach(el => {
 			const path = el.getAttribute('data-path');
-			if (path) cardsByPath.set(path, el as HTMLElement);
+			if (path) cardsByPath.set(path, el);
 		});
-		cardsByPath.set(file.path, card);
+		if (extraCard) cardsByPath.set(extraCard.file.path, extraCard.card);
 
+		let globalIndex = 0;
 		const appendGroup = (grid: HTMLElement, groupFiles: TFile[]) => {
-			groupFiles.forEach((f, idx) => {
+			groupFiles.forEach(f => {
 				const el = cardsByPath.get(f.path);
 				if (el) {
-					el.setAttribute('data-index', idx.toString());
+					el.setAttribute('data-index', (globalIndex++).toString());
 					grid.appendChild(el);
 				}
 			});
@@ -717,6 +754,7 @@ export class VisualDashboardView extends ItemView {
 
 		this.miniNotesGrid.empty();
 		this.miniNotesGrid.appendChild(fragment);
+		// Card heights stay cached because the elements and column widths are unchanged.
 		this.relayoutAllSections();
 	}
 
