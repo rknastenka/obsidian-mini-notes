@@ -3,6 +3,7 @@ import { DashboardData, DEFAULT_DATA, VIEW_TYPE_VISUAL_DASHBOARD, DASHBOARD_ICON
 import { VisualDashboardView } from './cards-view';
 import { MiniNotesSettingTab } from './settings';
 import { normalizeFolderPath } from './utils/paths';
+import { openFileInNewTab } from './utils/workspace';
 
 export default class VisualDashboardPlugin extends Plugin {
 	data: DashboardData = DEFAULT_DATA;
@@ -215,8 +216,7 @@ export default class VisualDashboardPlugin extends Plugin {
 			const file = await this.app.vault.create(filePath, content);
 			
 			// Open the file in a new leaf
-			const leaf = this.app.workspace.getLeaf('tab');
-			await leaf.openFile(file);
+			await openFileInNewTab(this.app, file);
 			
 			new Notice('New mini note created');
 		} catch (error) {

@@ -1,4 +1,5 @@
 import { App, TFile, MarkdownRenderer, setIcon, Component, Menu } from 'obsidian';
+import { openFileInNewTab } from './utils/workspace';
 
 const AUTO_SAVE_DELAY_MS = 500;
 
@@ -17,18 +18,24 @@ export class NoteEditorOverlay extends Component {
 	private currentContent = '';
 	private isDirty = false;
 	private keydownHandler: (e: KeyboardEvent) => void;
+	private previewRenderComponent: Component | null = null;
+	private isClosed = false;
+	private onDidClose?: () => void;
+	private closePromise: Promise<void> | null = null;
+	private previewGeneration = 0;
 
-	constructor(app: App, file: TFile, mountEl: HTMLElement) {
+	constructor(app: App, file: TFile, mountEl: HTMLElement, onDidClose?: () => void) {
 		super();
 		this.app = app;
 		this.file = file;
 		this.mountEl = mountEl;
+		this.onDidClose = onDidClose;
 		this.keydownHandler = (e: KeyboardEvent) => {
 			if (e.key === 'Escape') void this.close();
 		};
 	}
 
-	async open() {
+	async open(): Promise<boolean> {
 		// Ensure component lifecycle is active for MarkdownRenderer child components (like PDFs)
 		this.load();
 
@@ -37,22 +44,56 @@ export class NoteEditorOverlay extends Component {
 			this.currentContent = await this.app.vault.read(this.file);
 		} catch (err) {
 			console.error('NoteEditorOverlay: failed to read file', err);
-			return;
+			await this.close();
+			return false;
 		}
+		if (this.isClosed) return false;
 
 		this.buildDOM();
 
 		if (this.mode === 'preview') {
+			try {
+				await this.renderPreview();
+				if (this.isClosed) return false;
+			} catch (err) {
+				console.error('NoteEditorOverlay: failed to render preview', err);
+				await this.close();
+				return false;
+			}
+		}
+
+		this.registerDomEvent(activeDocument, 'keydown', this.keydownHandler);
+		return true;
+	}
+
+	private async renderPreview(): Promise<boolean> {
+		if (this.isClosed) return false;
+		const generation = ++this.previewGeneration;
+		const nextComponent = this.addChild(new Component());
+		const renderTarget = activeDocument.createElement('div');
+		try {
 			await MarkdownRenderer.render(
 				this.app,
 				this.currentContent,
-				this.previewEl!,
+				renderTarget,
 				this.file.path,
-				this
+				nextComponent
 			);
+		} catch (error) {
+			this.removeChild(nextComponent);
+			throw error;
+		}
+		if (this.isClosed || this.mode !== 'preview' || generation !== this.previewGeneration) {
+			this.removeChild(nextComponent);
+			return false;
 		}
 
-		activeDocument.addEventListener('keydown', this.keydownHandler);
+		this.previewEl!.empty();
+		this.previewEl!.append(...Array.from(renderTarget.childNodes));
+		const previousComponent = this.previewRenderComponent;
+		this.previewRenderComponent = nextComponent;
+		if (previousComponent) this.removeChild(previousComponent);
+		return true;
 	}
 
 	private buildDOM() {
@@ -109,8 +150,7 @@ export class NoteEditorOverlay extends Component {
 		openBtn.addEventListener('click', () => {
 			void (async () => {
 				await this.saveNow();
-				const leaf = this.app.workspace.getLeaf('tab');
-				await leaf.openFile(this.file);
+				await openFileInNewTab(this.app, this.file);
 				await this.close();
 			})();
 		});
@@ -145,6 +185,7 @@ export class NoteEditorOverlay extends Component {
 			if (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'checkbox' && target.classList.contains('task-list-item-checkbox')) {
 
 				window.setTimeout(() => {
+					if (this.isClosed) return;
 					const li = target.closest('li');
 					let lineIdx = -1;
 					const lines = this.currentContent.split('\n');
@@ -222,6 +263,7 @@ export class NoteEditorOverlay extends Component {
 	}
 
 	private async toggleMode(modeBtn: HTMLElement) {
+		if (this.isClosed) return;
 		if (this.mode === 'edit') {
 			// Switch to preview
 			this.mode = 'preview';
@@ -230,25 +272,26 @@ export class NoteEditorOverlay extends Component {
 			this.textareaEl!.addClass('neo-hidden');
 			this.previewEl!.removeClass('neo-hidden');
 			this.previewEl!.empty();
-			await MarkdownRenderer.render(
-				this.app,
-				this.currentContent,
-				this.previewEl!,
-				this.file.path,
-				this
-			);
+			await this.renderPreview();
 		} else {
 			// Switch to edit
 			this.mode = 'edit';
+			this.previewGeneration++;
 			setIcon(modeBtn, 'eye');
 			modeBtn.setAttribute('aria-label', 'Toggle preview');
 			this.previewEl!.addClass('neo-hidden');
+			this.previewEl!.empty();
+			if (this.previewRenderComponent) {
+				this.removeChild(this.previewRenderComponent);
+				this.previewRenderComponent = null;
+			}
 			this.textareaEl!.removeClass('neo-hidden');
 			this.textareaEl!.focus();
 		}
 	}
 
 	private scheduleSave() {
+		if (this.isClosed) return;
 		this.isDirty = true;
 		this.setSaveIndicator('saving');
 
@@ -287,7 +330,15 @@ export class NoteEditorOverlay extends Component {
 		}
 	}
 
-	async close() {
+	close(): Promise<void> {
+		if (!this.closePromise) this.closePromise = this.performClose();
+		return this.closePromise;
+	}
+
+	private async performClose() {
+		this.isClosed = true;
+		this.previewGeneration++;
+
 		// Save any pending changes before closing
 		if (this.isDirty) {
 			if (this.autoSaveTimer !== null) {
@@ -297,7 +348,10 @@ export class NoteEditorOverlay extends Component {
 			await this.saveNow();
 		}
 
-		activeDocument.removeEventListener('keydown', this.keydownHandler);
+		if (this.autoSaveTimer !== null) {
+			window.clearTimeout(this.autoSaveTimer);
+			this.autoSaveTimer = null;
+		}
 
 		// Animate out then remove
 		if (this.backdropEl) {
@@ -310,5 +364,7 @@ export class NoteEditorOverlay extends Component {
 		}
 
 		this.unload();
+		this.previewRenderComponent = null;
+		this.onDidClose?.();
 	}
 }

@@ -16,6 +16,21 @@ export interface SearchSuggestion {
 	display: string;
 }
 
+const FILTER_COLOR_MAP: Record<string, string> = {
+	'pink': 'pastel-magenta',
+	'peach': 'pastel-peach',
+	'yellow': 'pastel-yellow',
+	'green': 'pastel-green',
+	'blue': 'pastel-blue',
+	'purple': 'pastel-purple'
+};
+
+const LINK_PATTERN = new RegExp(
+	'(?:^|[^!])(?:\\[.*?\\]\\((?![^)]*\\.(?:png|jpg|jpeg|gif|bmp|svg|webp|pdf)\\b)[^)]+\\)|' +
+	'\\[\\[(?![^\\]]*\\.(?:png|jpg|jpeg|gif|bmp|svg|webp|pdf)\\b)[^\\]]+\\]\\])',
+	'i'
+);
+
 export function parseSearchOperators(query: string): Omit<SearchState, 'query'> {
 	const filterOperators = new Map<string, string>();
 	const filterColors: string[] = [];
@@ -305,15 +320,7 @@ export function applyStructuralFilters(
 
 				if (!savedColor) return false;
 
-				const colorMap: Record<string, string> = {
-					'pink': 'pastel-magenta',
-					'peach': 'pastel-peach',
-					'yellow': 'pastel-yellow',
-					'green': 'pastel-green',
-					'blue': 'pastel-blue',
-					'purple': 'pastel-purple'
-				};
-				const expectedColor = colorMap[filterColor];
+				const expectedColor = FILTER_COLOR_MAP[filterColor];
 				if (!expectedColor) return false;
 				return savedColor.includes(expectedColor);
 			});
@@ -325,20 +332,22 @@ export function applyStructuralFilters(
 	return filtered;
 }
 
-// Filters that require file content: tag, text query, has:/type: operators.
+// Filters that require file content or cached tags: tag, text query, has:/type: operators.
 export function applyContentFilters(
 	files: TFile[],
 	fileContents: Map<string, string>,
-	searchState: SearchState
+	searchState: SearchState,
+	fileTags?: ReadonlyMap<string, readonly string[]>
 ): TFile[] {
 	let filtered = [...files];
+	const getTags = (file: TFile): readonly string[] => {
+		return fileTags?.get(file.path) ?? extractTags(fileContents.get(file.path) || '');
+	};
 
 	// Apply tag filter
 	if (searchState.filterTag) {
 		filtered = filtered.filter(f => {
-			const content = fileContents.get(f.path) || '';
-			const tags = extractTags(content);
-			return tags.includes(searchState.filterTag!);
+			return getTags(f).includes(searchState.filterTag!);
 		});
 	}
 
@@ -348,7 +357,7 @@ export function applyContentFilters(
 
 		filtered = filtered.filter(f => {
 			const content = fileContents.get(f.path) || '';
-			const tags = extractTags(content);
+			const tags = getTags(f);
 
 			// Check text search
 			let matchesText = true;
@@ -388,12 +397,7 @@ export function applyContentFilters(
 						// Excludes: links with ! prefix (embeds) and links to image/PDF files
 						// Note: uses a captured non-'!' prefix instead of a negative lookbehind,
 						// since lookbehinds aren't supported on iOS versions before 16.4
-						const linkPattern = new RegExp(
-							'(?:^|[^!])(?:\\[.*?\\]\\((?![^)]*\\.(?:png|jpg|jpeg|gif|bmp|svg|webp|pdf)\\b)[^)]+\\)|' +
-							'\\[\\[(?![^\\]]*\\.(?:png|jpg|jpeg|gif|bmp|svg|webp|pdf)\\b)[^\\]]+\\]\\])',
-							'i'
-						);
-						if (!content.match(linkPattern)) return false;
+						if (!content.match(LINK_PATTERN)) return false;
 						break;
 					}
 					case 'list':

@@ -515,9 +515,6 @@
     margin: 0;
     max-height: 600px;
     overflow: hidden;
-    will-change: transform;
-    transform: translateZ(0);
-    backface-visibility: hidden;
 }
 
 .dashboard-card:hover {
@@ -529,6 +526,7 @@
     opacity: 0.7;
     cursor: pointer;
     transform: scale(0.99);
+    will-change: transform;
 }
 
 .dashboard-card.drag-over {
