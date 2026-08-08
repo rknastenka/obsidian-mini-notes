@@ -7,6 +7,7 @@ import { formatDate } from './utils/date';
 import { parseSearchOperators, getSearchSuggestions, applyStructuralFilters, applyContentFilters, isSimpleTextSearch, highlightSearchTerms, getCleanQuery, type SearchState } from './utils/search';
 import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH, PASTEL_SWATCHES } from './utils/constants';
 import { layoutMasonrySection } from './utils/masonry';
+import { isPathExcluded, isPathInFolder } from './utils/paths';
 
 export class VisualDashboardView extends ItemView {
 	private miniNotesGrid!: HTMLElement;
@@ -475,8 +476,11 @@ export class VisualDashboardView extends ItemView {
 			// Filter by source folder if specified ("/" = all notes)
 			const sourceFolder = this.plugin.data.sourceFolder.trim();
 			if (sourceFolder && sourceFolder !== '/') {
-				files = files.filter((file: TFile) => file.path.startsWith(sourceFolder));
+				files = files.filter((file: TFile) => isPathInFolder(file.path, sourceFolder));
 			}
+
+			// Hide notes from excluded folders and all of their subfolders
+			files = files.filter((file: TFile) => !isPathExcluded(file.path, this.plugin.data.excludedFolders));
 
 			// Filter out config folder files to avoid reading plugin/config files
 			files = files.filter((file: TFile) => !file.path.startsWith(this.app.vault.configDir + '/'));

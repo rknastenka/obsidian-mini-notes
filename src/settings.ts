@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting, setIcon } from 'obsidian';
 import type VisualDashboardPlugin from './main';
 import { PASTEL_SWATCHES } from './utils/constants';
+import { parseExcludedFolders } from './utils/paths';
 
 export class MiniNotesSettingTab extends PluginSettingTab {
 	plugin: VisualDashboardPlugin;
@@ -49,6 +50,22 @@ export class MiniNotesSettingTab extends PluginSettingTab {
 					await this.plugin.savePluginData();
 					this.app.workspace.trigger('mini-notes:settings-changed');
 				});
+			});
+
+		new Setting(containerEl)
+			.setName('Excluded folders')
+			.setDesc('Folder paths to hide from the view, one per line. Each entry also hides its subfolders.')
+			.addTextArea(text => {
+				text
+					.setPlaceholder('Daily notes\narchive')
+					.setValue(this.plugin.data.excludedFolders.join('\n'))
+					.onChange(async (value) => {
+						this.plugin.data.excludedFolders = parseExcludedFolders(value);
+						await this.plugin.savePluginData();
+						this.app.workspace.trigger('mini-notes:settings-changed');
+					});
+				text.inputEl.rows = 4;
+				text.inputEl.cols = 28;
 			});
 
 		new Setting(containerEl)

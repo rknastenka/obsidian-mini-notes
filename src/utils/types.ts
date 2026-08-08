@@ -7,6 +7,7 @@ export interface DashboardData {
 	noteOrder: string[]; 
 	viewTitle: string; 
 	sourceFolder: string; 
+	excludedFolders: string[];
 	createFolder: string;
 	maxNotes: number;
 	noteColors: Record<string, string>;
@@ -22,6 +23,7 @@ export const DEFAULT_DATA: DashboardData = {
 	noteOrder: [],
 	viewTitle: 'Do Your Best Today!',
 	sourceFolder: '/',
+	excludedFolders: [],
 	createFolder: '/',
 	maxNotes: 150,
 	noteColors: {},

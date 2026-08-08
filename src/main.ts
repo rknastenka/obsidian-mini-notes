@@ -2,6 +2,7 @@ import { Plugin, WorkspaceLeaf, addIcon, Notice, normalizePath } from 'obsidian'
 import { DashboardData, DEFAULT_DATA, VIEW_TYPE_VISUAL_DASHBOARD, DASHBOARD_ICON } from './utils/types';
 import { VisualDashboardView } from './cards-view';
 import { MiniNotesSettingTab } from './settings';
+import { normalizeFolderPath } from './utils/paths';
 
 export default class VisualDashboardPlugin extends Plugin {
 	data: DashboardData = DEFAULT_DATA;
@@ -77,6 +78,18 @@ export default class VisualDashboardPlugin extends Plugin {
 			if (this.data.sourceFolder === '') {
 				this.data.sourceFolder = DEFAULT_DATA.sourceFolder;
 				await this.savePluginData();
+			}
+
+			// Migration: sanitize excluded folders added in 1.5.0
+			if (!Array.isArray(this.data.excludedFolders)) {
+				this.data.excludedFolders = [];
+			} else {
+				this.data.excludedFolders = Array.from(new Set(
+					this.data.excludedFolders
+						.filter((folder): folder is string => typeof folder === 'string')
+						.map(normalizeFolderPath)
+						.filter(Boolean)
+				));
 			}
 		} catch (error) {
 			console.error('Error loading plugin data, using defaults:', error);
