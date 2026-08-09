@@ -5,6 +5,7 @@ Review them later in a colorful Google Keep-style card-based view, where you can
 - view your notes in a google keep-notes similar layout
 - change the bg color of your notes!
 - pin your most important notes
+- shuffle the displayed notes instantly with the dice button
 - filter your notes based on their tags, folder, color, type.
 	- **Example:**    `folder:projects`  `color:yellow`   `tag:cs`
 
@@ -59,9 +60,12 @@ Review them later in a colorful Google Keep-style card-based view, where you can
 - Drag cards to reorder them
 - **Settings → Mini Notes** to configure:
   - Source folder (where notes are fetched from)
+  - Excluded folders (one folder path per line; subfolders are excluded too)
   - Create folder (where new mini notes will be saved)
   - Maximum notes to display (default: 150)
   - Theme color preferences
+
+To hide folders such as daily notes while keeping **Source folder** set to **All notes**, add paths like `Daily Notes` under **Excluded folders**. Put each folder on its own line.
 
 ### Filtering: within the search bar
 - search for normal text, using the smart search or

@@ -1,4 +1,6 @@
 export const FILE_FETCH_MULTIPLIER = 3;
+export const FILE_READ_CONCURRENCY = 12;
+export const CARD_RENDER_CONCURRENCY = 4;
 
 export const DEBOUNCE_REFRESH_MS = 1000;
 export const MAX_PREVIEW_LENGTH = 800;

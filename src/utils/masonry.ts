@@ -61,9 +61,25 @@ export function layoutMasonrySection(section: HTMLElement, heightCache: WeakMap<
 		for (const card of cards) heightCache.delete(card);
 	}
 
+	// Batch layout writes, then reads, then writes again. Interleaving a size
+	// read after positioning every card can force a full synchronous layout per card.
+	for (const card of cards) {
+		card.setCssStyles({ width: `${colWidth}px` });
+	}
+
+	const cardHeights = cards.map(card => {
+		let height = heightCache.get(card);
+		if (height === undefined) {
+			height = card.getBoundingClientRect().height;
+			heightCache.set(card, height);
+		}
+		return height;
+	});
+
 	const columnHeights: number[] = new Array<number>(columnCount).fill(0);
 
-	for (const card of cards) {
+	for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
+		const card = cards[cardIndex]!;
 		let target = 0;
 		let shortest = columnHeights[0] ?? 0;
 		for (let i = 1; i < columnCount; i++) {
@@ -76,18 +92,11 @@ export function layoutMasonrySection(section: HTMLElement, heightCache: WeakMap<
 
 		const top = shortest;
 		card.setCssStyles({
-			width: `${colWidth}px`,
 			left: `${target * (colWidth + gap)}px`,
 			top: `${top}px`,
 		});
 
-		let height = heightCache.get(card);
-		if (height === undefined) {
-			height = card.getBoundingClientRect().height;
-			heightCache.set(card, height);
-		}
-
-		columnHeights[target] = top + height + gap;
+		columnHeights[target] = top + cardHeights[cardIndex]! + gap;
 	}
 
 	section.setCssStyles({ height: `${Math.max(...columnHeights) - gap}px` });

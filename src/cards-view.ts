@@ -1,12 +1,20 @@
-import { ItemView, TFile, WorkspaceLeaf, setIcon, MarkdownRenderer } from 'obsidian';
+import { Component, ItemView, TAbstractFile, TFile, WorkspaceLeaf, setIcon, MarkdownRenderer, Keymap } from 'obsidian';
 import { NoteEditorOverlay } from './note-editor-overlay';
 import type VisualDashboardPlugin from './main';
 import { VIEW_TYPE_VISUAL_DASHBOARD } from './utils/types';
 import { extractTags, stripYamlFrontmatter, getFrontmatterLineCount } from './utils/markdown';
 import { formatDate } from './utils/date';
 import { parseSearchOperators, getSearchSuggestions, applyStructuralFilters, applyContentFilters, isSimpleTextSearch, highlightSearchTerms, getCleanQuery, type SearchState } from './utils/search';
-import { FILE_FETCH_MULTIPLIER, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH, PASTEL_SWATCHES } from './utils/constants';
+import { CARD_RENDER_CONCURRENCY, FILE_FETCH_MULTIPLIER, FILE_READ_CONCURRENCY, DEBOUNCE_REFRESH_MS, MAX_PREVIEW_LENGTH, PASTEL_SWATCHES } from './utils/constants';
 import { layoutMasonrySection } from './utils/masonry';
+import { isPathExcluded, isPathInFolder } from './utils/paths';
+import { shuffleInPlace } from './utils/shuffle';
+import { openFileInNewTab } from './utils/workspace';
+
+const NOTE_COLOR_OPTIONS = [
+	...PASTEL_SWATCHES.map(swatch => swatch.value),
+	'var(--pastel-gray)'
+];
 
 export class VisualDashboardView extends ItemView {
 	private miniNotesGrid!: HTMLElement;
@@ -24,6 +32,14 @@ export class VisualDashboardView extends ItemView {
 	private cardHeightCache = new WeakMap<HTMLElement, number>();
 	private resizeObserver: ResizeObserver | null = null;
 	private relayoutFrameId: number | null = null;
+	private renderGeneration = 0;
+	private activeRenderGeneration: number | null = null;
+	private cardRenderComponent: Component | null = null;
+	private activeOverlay: NoteEditorOverlay | null = null;
+	private overlayGeneration = 0;
+	private isClosing = false;
+	private tagCache = new Map<string, { mtime: number; size: number; tags: string[] }>();
+	private renderedDependencyPaths = new Set<string>();
 
 	// Filter state
 	private filterPinned: 'all' | 'pinned' | 'unpinned' = 'all';
@@ -69,6 +85,7 @@ export class VisualDashboardView extends ItemView {
 	}
 
 	async onOpen() {
+		this.isClosing = false;
 		const container = this.contentEl;
 		container.empty();
 		container.addClass('visual-dashboard-container');
@@ -106,6 +123,18 @@ export class VisualDashboardView extends ItemView {
 
 		// Controls on right
 		const controls = header.createDiv({ cls: 'header-controls' });
+
+		// Shuffle visible notes without rereading or rerendering their content
+		const shuffleBtn = controls.createEl('button', {
+			cls: 'shuffle-notes-btn',
+			attr: {
+				'aria-label': 'Shuffle notes',
+				title: 'Shuffle notes',
+				type: 'button'
+			}
+		});
+		setIcon(shuffleBtn, 'dices');
+		shuffleBtn.addEventListener('click', () => this.shuffleDisplayedNotes());
 
 		// Search bar with autocomplete
 		const searchContainer = controls.createDiv({ cls: 'search-container' });
@@ -215,6 +244,7 @@ export class VisualDashboardView extends ItemView {
 
 		// Render the cards
 		await this.renderCards();
+		if (this.isClosing) return;
 
 		// Register event listeners only once
 		if (!this.eventsRegistered) {
@@ -250,6 +280,7 @@ export class VisualDashboardView extends ItemView {
 
 	/** rAF-throttled relayout for high-frequency triggers (resize, image loads). */
 	private scheduleMasonryRelayout() {
+		if (this.isClosing) return;
 		if (this.relayoutFrameId !== null) return;
 		this.relayoutFrameId = window.requestAnimationFrame(() => {
 			this.relayoutFrameId = null;
@@ -266,16 +297,31 @@ export class VisualDashboardView extends ItemView {
 
 		// Listen for file changes to auto-refresh
 		this.registerEvent(
-			this.app.vault.on('modify', () => this.debouncedRefresh())
+			this.app.vault.on('modify', (file) => {
+				this.tagCache.delete(file.path);
+				if (this.shouldRefreshForVaultFile(file)) this.debouncedRefresh();
+			})
 		);
 		this.registerEvent(
-			this.app.vault.on('create', () => this.debouncedRefresh())
+			this.app.vault.on('create', (file) => {
+				this.tagCache.delete(file.path);
+				if (this.shouldRefreshForCreatedFile(file)) this.debouncedRefresh();
+			})
 		);
 		this.registerEvent(
-			this.app.vault.on('delete', () => this.debouncedRefresh())
+			this.app.vault.on('delete', (file) => {
+				this.tagCache.delete(file.path);
+				if (this.shouldRefreshForVaultFile(file)) this.debouncedRefresh();
+			})
 		);
 		this.registerEvent(
-			this.app.vault.on('rename', () => this.debouncedRefresh())
+			this.app.vault.on('rename', (file, oldPath) => {
+				this.tagCache.delete(oldPath);
+				this.tagCache.delete(file.path);
+				if (this.shouldRefreshForCreatedFile(file) || this.shouldRefreshForVaultPath(oldPath)) {
+					this.debouncedRefresh();
+				}
+			})
 		);
 
 		// Handle Ctrl+Z / Cmd+Z for undoing deletions
@@ -302,7 +348,30 @@ export class VisualDashboardView extends ItemView {
 		});
 	}
 
+	private shouldRefreshForVaultFile(file: TAbstractFile): boolean {
+		if (!(file instanceof TFile)) return true;
+		return this.shouldRefreshForVaultPath(file.path);
+	}
+
+	private shouldRefreshForCreatedFile(file: TAbstractFile): boolean {
+		if (!(file instanceof TFile)) return true;
+		if (file.path === this.app.vault.configDir || file.path.startsWith(`${this.app.vault.configDir}/`)) return false;
+		if (file.extension !== 'md') return true;
+		return this.shouldRefreshForVaultPath(file.path);
+	}
+
+	private shouldRefreshForVaultPath(path: string): boolean {
+		if (this.renderedDependencyPaths.has(path)) return true;
+		if (path === this.app.vault.configDir || path.startsWith(`${this.app.vault.configDir}/`)) return false;
+		if (!path.toLowerCase().endsWith('.md')) return false;
+
+		const sourceFolder = this.plugin.data.sourceFolder.trim();
+		if (sourceFolder && sourceFolder !== '/' && !isPathInFolder(path, sourceFolder)) return false;
+		return !isPathExcluded(path, this.plugin.data.excludedFolders);
+	}
+
 	private async refreshView() {
+		if (this.isClosing) return;
 		// Update theme color
 		this.applyThemeColor();
 
@@ -317,17 +386,28 @@ export class VisualDashboardView extends ItemView {
 	}
 
 	private debouncedRefresh() {
+		if (this.isClosing) return;
+		// Cancel any in-flight render immediately so an old snapshot cannot commit
+		// during the debounce window.
+		this.renderGeneration++;
 		if (this.refreshTimeoutId !== null) {
 			window.clearTimeout(this.refreshTimeoutId);
 		}
 
 		this.refreshTimeoutId = window.setTimeout(() => {
+			this.refreshTimeoutId = null;
 			// Don't rebuild the DOM while the user is dragging — it would
 			// destroy the dragged element and silently lose the reorder.
-			if (this.isDragging) return;
+			if (this.isDragging) {
+				this.debouncedRefresh();
+				return;
+			}
 			void this.renderCards();
-			this.refreshTimeoutId = null;
 		}, DEBOUNCE_REFRESH_MS);
+	}
+
+	private refreshIfRendering() {
+		if (this.activeRenderGeneration !== null) this.debouncedRefresh();
 	}
 
 	private updateSearchState(query: string) {
@@ -465,18 +545,114 @@ export class VisualDashboardView extends ItemView {
 		container.style.setProperty('--masonry-theme-color', themeColor);
 	}
 
+	private async readFileContents(
+		files: TFile[],
+		fileContents: Map<string, string>,
+		failedFilePaths: Set<string>,
+		generation: number
+	): Promise<void> {
+		let nextIndex = 0;
+		const workerCount = Math.min(FILE_READ_CONCURRENCY, files.length);
+		const workers = Array.from({ length: workerCount }, async () => {
+			while (generation === this.renderGeneration) {
+				const index = nextIndex++;
+				if (index >= files.length) return;
+				const file = files[index]!;
+				if (fileContents.has(file.path)) continue;
+
+				try {
+					fileContents.set(file.path, await this.app.vault.cachedRead(file));
+				} catch (error) {
+					console.warn(`Failed to read file ${file.path}:`, error);
+					failedFilePaths.add(file.path);
+					fileContents.set(file.path, '');
+				}
+			}
+		});
+
+		await Promise.all(workers);
+	}
+
+	private async renderCardsWithConcurrency(
+		files: TFile[],
+		fileContents: Map<string, string>,
+		fileTags: ReadonlyMap<string, readonly string[]>,
+		failedFilePaths: ReadonlySet<string>,
+		renderComponent: Component,
+		generation: number
+	): Promise<Array<HTMLElement | null>> {
+		const cards = new Array<HTMLElement | null>(files.length).fill(null);
+		let nextIndex = 0;
+		const workerCount = Math.min(CARD_RENDER_CONCURRENCY, files.length);
+		const workers = Array.from({ length: workerCount }, async () => {
+			while (generation === this.renderGeneration) {
+				const index = nextIndex++;
+				if (index >= files.length) return;
+				const file = files[index]!;
+				if (failedFilePaths.has(file.path)) continue;
+				cards[index] = await this.createCard(
+					file,
+					index,
+					fileContents.get(file.path) ?? '',
+					fileTags.get(file.path) ?? [],
+					renderComponent
+				);
+			}
+		});
+
+		await Promise.all(workers);
+		return cards;
+	}
+
+	private replaceCardRenderComponent(nextComponent: Component | null) {
+		const previousComponent = this.cardRenderComponent;
+		this.cardRenderComponent = nextComponent;
+		if (previousComponent) this.removeChild(previousComponent);
+	}
+
+	private getRenderedDependencyPaths(files: TFile[]): Set<string> {
+		const dependencies = new Set<string>();
+		const visitedNotes = new Set<string>();
+		const visit = (file: TFile) => {
+			if (visitedNotes.has(file.path)) return;
+			visitedNotes.add(file.path);
+			const embeds = this.app.metadataCache.getFileCache(file)?.embeds ?? [];
+			for (const embed of embeds) {
+				const destination = this.app.metadataCache.getFirstLinkpathDest(embed.link, file.path);
+				if (!destination) continue;
+				dependencies.add(destination.path);
+				if (destination.extension === 'md') visit(destination);
+			}
+		};
+		files.forEach(visit);
+		return dependencies;
+	}
+
 	async renderCards() {
+		if (this.isClosing) return;
+		const generation = ++this.renderGeneration;
+		this.activeRenderGeneration = generation;
+		let nextRenderComponent: Component | null = null;
+
 		try {
-			// Do not empty the grid immediately, we need to gather the new DOM first for smooth view transitions
+			// Keep the current grid visible while the replacement fragment is prepared.
 
 			// Get all markdown files, filtered by source folder if specified
-			let files = this.app.vault.getMarkdownFiles();
+			const allMarkdownFiles = this.app.vault.getMarkdownFiles();
+			const existingPathSet = new Set(allMarkdownFiles.map(file => file.path));
+			for (const path of this.tagCache.keys()) {
+				if (!existingPathSet.has(path)) this.tagCache.delete(path);
+			}
+			let files = allMarkdownFiles;
 
 			// Filter by source folder if specified ("/" = all notes)
 			const sourceFolder = this.plugin.data.sourceFolder.trim();
 			if (sourceFolder && sourceFolder !== '/') {
-				files = files.filter((file: TFile) => file.path.startsWith(sourceFolder));
+				files = files.filter((file: TFile) => isPathInFolder(file.path, sourceFolder));
 			}
+
+			// Hide notes from excluded folders and all of their subfolders
+			files = files.filter((file: TFile) => !isPathExcluded(file.path, this.plugin.data.excludedFolders));
 
 			// Filter out config folder files to avoid reading plugin/config files
 			files = files.filter((file: TFile) => !file.path.startsWith(this.app.vault.configDir + '/'));
@@ -502,29 +678,71 @@ export class VisualDashboardView extends ItemView {
 
 			// Sort by mtime but always retain files that are in the saved noteOrder
 			// so their custom position is never lost due to the pool size cutoff
-			const savedOrderSet = new Set(this.plugin.data.noteOrder);
+			const orderIndexByPath = new Map(this.plugin.data.noteOrder.map((path, index) => [path, index]));
+			const savedOrderSet = new Set(orderIndexByPath.keys());
 			const poolLimit = this.plugin.data.maxNotes * FILE_FETCH_MULTIPLIER;
 			files.sort((a: TFile, b: TFile) => b.stat.mtime - a.stat.mtime);
 			const inOrder = files.filter(f => savedOrderSet.has(f.path));
 			const notInOrder = files.filter(f => !savedOrderSet.has(f.path));
 			files = [...inOrder, ...notInOrder].slice(0, poolLimit); // Get more initially for filtering
 
-			// Pre-load content for tag filtering with error handling
+			// Cache the plugin's existing tag parser results by file version. This keeps
+			// tag filtering, card footers, and tag colors identical while avoiding a
+			// full candidate-pool read on subsequent renders.
 			const fileContents = new Map<string, string>();
+			const fileTags = new Map<string, readonly string[]>();
+			const failedFilePaths = new Set<string>();
 			const tagSet = new Set<string>();
+			const filesNeedingTags: TFile[] = [];
+			const tagVersions = new Map<string, { mtime: number; size: number }>();
+			let tagVersionChangedDuringRead = false;
 			for (const file of files) {
-				try {
-					const content = await this.app.vault.cachedRead(file);
-					fileContents.set(file.path, content);
-					const tags = extractTags(content);
-					tags.forEach(tag => tagSet.add(tag));
-				} catch (error) {
-					console.warn(`Failed to read file ${file.path}:`, error);
-					fileContents.set(file.path, '');
+				const cachedTags = this.tagCache.get(file.path);
+				if (!cachedTags || cachedTags.mtime !== file.stat.mtime || cachedTags.size !== file.stat.size) {
+					filesNeedingTags.push(file);
+					tagVersions.set(file.path, { mtime: file.stat.mtime, size: file.stat.size });
+					continue;
 				}
+
+				fileTags.set(file.path, cachedTags.tags);
+				cachedTags.tags.forEach(tag => tagSet.add(tag));
 			}
 
-			this.allTags = Array.from(tagSet).sort();
+			const needsFileContent = getCleanQuery(searchState.query).length > 0 || searchState.filterOperators.size > 0;
+			await this.readFileContents(
+				needsFileContent ? files : filesNeedingTags,
+				fileContents,
+				failedFilePaths,
+				generation
+			);
+			if (generation !== this.renderGeneration) return;
+
+			for (const file of filesNeedingTags) {
+				if (failedFilePaths.has(file.path)) {
+					fileTags.set(file.path, []);
+					continue;
+				}
+				const expectedVersion = tagVersions.get(file.path);
+				if (!expectedVersion || expectedVersion.mtime !== file.stat.mtime || expectedVersion.size !== file.stat.size) {
+					fileTags.set(file.path, []);
+					tagVersionChangedDuringRead = true;
+					continue;
+				}
+				const tags = extractTags(fileContents.get(file.path) ?? '');
+				fileTags.set(file.path, tags);
+				this.tagCache.set(file.path, {
+					mtime: file.stat.mtime,
+					size: file.stat.size,
+					tags
+				});
+				tags.forEach(tag => tagSet.add(tag));
+			}
+			if (tagVersionChangedDuringRead) {
+				this.debouncedRefresh();
+				return;
+			}
+
+			const nextAllTags = Array.from(tagSet).sort();
 
 			// Get all folders in vault for folder suggestions
 			const folderSet = new Set<string>();
@@ -534,82 +752,109 @@ export class VisualDashboardView extends ItemView {
 					if (file.path && file.path !== '/' && file.path !== '') folderSet.add(file.path);
 				}
 			});
-			this.allFolders = Array.from(folderSet).sort();
+			const nextAllFolders = Array.from(folderSet).sort();
 
 			// Apply remaining content-dependent filters (tag/text query/has:/type:)
 			// structural filters (folder/pinned/color) were already applied above
-			files = applyContentFilters(files, fileContents, searchState);
+			files = applyContentFilters(files, fileContents, searchState, fileTags);
 
 			// Sort by custom order first, then limit — so custom-ordered notes aren't
 			// accidentally dropped by the slice before their position is evaluated
 			const sortByOrderEarly = (a: TFile, b: TFile) => {
-				const aOrder = this.plugin.getOrderIndex(a.path);
-				const bOrder = this.plugin.getOrderIndex(b.path);
-				if (aOrder > -1 && bOrder > -1) return aOrder - bOrder;
-				if (aOrder > -1) return -1;
-				if (bOrder > -1) return 1;
+				const aOrder = orderIndexByPath.get(a.path);
+				const bOrder = orderIndexByPath.get(b.path);
+				if (aOrder !== undefined && bOrder !== undefined) return aOrder - bOrder;
+				if (aOrder !== undefined) return -1;
+				if (bOrder !== undefined) return 1;
 				return b.stat.mtime - a.stat.mtime;
 			};
 			files = files.sort(sortByOrderEarly).slice(0, this.plugin.data.maxNotes);
 
 			// Separate and sort files by pin status
 			const sortByOrder = (a: TFile, b: TFile) => {
-				const aOrder = this.plugin.getOrderIndex(a.path);
-				const bOrder = this.plugin.getOrderIndex(b.path);
+				const aOrder = orderIndexByPath.get(a.path);
+				const bOrder = orderIndexByPath.get(b.path);
 
-				if (aOrder > -1 && bOrder > -1) return aOrder - bOrder;
-				if (aOrder > -1) return -1;
-				if (bOrder > -1) return 1;
+				if (aOrder !== undefined && bOrder !== undefined) return aOrder - bOrder;
+				if (aOrder !== undefined) return -1;
+				if (bOrder !== undefined) return 1;
 				return b.stat.mtime - a.stat.mtime;
 			};
 
-			const pinnedFiles = files.filter(f => this.plugin.isPinned(f.path)).sort(sortByOrder);
-			const unpinnedFiles = files.filter(f => !this.plugin.isPinned(f.path)).sort(sortByOrder);
+			let pinnedFiles = files.filter(f => this.plugin.isPinned(f.path)).sort(sortByOrder);
+			let unpinnedFiles = files.filter(f => !this.plugin.isPinned(f.path)).sort(sortByOrder);
 
-			// Store the combined order for drag-and-drop
-			this.currentFiles = [...pinnedFiles, ...unpinnedFiles];
-
-			// Prune stale entries from noteOrder (deleted/moved files)
-			const currentPathSet = new Set(this.currentFiles.map(f => f.path));
-			const prunedOrder = this.plugin.data.noteOrder.filter(p => currentPathSet.has(p));
-			if (prunedOrder.length !== this.plugin.data.noteOrder.length) {
-				this.plugin.data.noteOrder = prunedOrder;
-				// Fire-and-forget — we're just cleaning up, not changing visible order
-				void this.plugin.savePluginData();
-			}
+			const commitRenderState = (currentFiles: TFile[]) => {
+				this.allTags = nextAllTags;
+				this.allFolders = nextAllFolders;
+				this.currentFiles = currentFiles;
+				this.renderedDependencyPaths = this.getRenderedDependencyPaths(currentFiles);
+				const latestExistingPaths = new Set(this.app.vault.getMarkdownFiles().map(file => file.path));
+				const latestPrunedOrder = this.plugin.data.noteOrder.filter(path => latestExistingPaths.has(path));
+				if (latestPrunedOrder.length !== this.plugin.data.noteOrder.length) {
+					this.plugin.data.noteOrder = latestPrunedOrder;
+					void this.plugin.savePluginData();
+				}
+			};
+			const applyEmpty = () => {
+				this.closeAllColorDropdowns();
+				this.miniNotesGrid.empty();
+				this.replaceCardRenderComponent(null);
+				commitRenderState([]);
+				const emptyState = this.miniNotesGrid.createDiv({ cls: 'dashboard-empty-state' });
+				emptyState.createEl('h3', { text: 'No matching notes' });
+				emptyState.createEl('p', { text: 'Try adjusting your filters' });
+			};
 
 			if (files.length === 0) {
-				const applyEmpty = () => {
-					this.miniNotesGrid.empty();
-					const emptyState = this.miniNotesGrid.createDiv({ cls: 'dashboard-empty-state' });
-					emptyState.createEl('h3', { text: 'No matching notes' });
-					emptyState.createEl('p', { text: 'Try adjusting your filters' });
-				};
-
-				// @ts-ignore - View Transitions API
-				if (activeDocument.startViewTransition) {
-					// @ts-ignore
-					activeDocument.startViewTransition(() => applyEmpty());
-				} else {
-					applyEmpty();
-				}
+				applyEmpty();
 				return;
 			}
 
-			let globalIndex = 0;
+			// Drop bodies for filtered-out candidates before rendering the selected cards.
+			const displayedPaths = new Set(files.map(file => file.path));
+			for (const path of fileContents.keys()) {
+				if (!displayedPaths.has(path)) fileContents.delete(path);
+			}
+			await this.readFileContents(files, fileContents, failedFilePaths, generation);
+			if (generation !== this.renderGeneration) return;
+			pinnedFiles = pinnedFiles.filter(file => !failedFilePaths.has(file.path));
+			unpinnedFiles = unpinnedFiles.filter(file => !failedFilePaths.has(file.path));
+
+			const orderedFiles = [...pinnedFiles, ...unpinnedFiles];
+			if (orderedFiles.length === 0) {
+				applyEmpty();
+				return;
+			}
+			nextRenderComponent = this.addChild(new Component());
+			const cards = await this.renderCardsWithConcurrency(
+				orderedFiles,
+				fileContents,
+				fileTags,
+				failedFilePaths,
+				nextRenderComponent,
+				generation
+			);
+			if (generation !== this.renderGeneration) {
+				this.removeChild(nextRenderComponent);
+				nextRenderComponent = null;
+				return;
+			}
 
 			// Check if we need sections (both pinned and unpinned exist)
 			const needsSections = pinnedFiles.length > 0 && unpinnedFiles.length > 0;
 			const fragment = activeDocument.createDocumentFragment();
+			const appendCards = (grid: HTMLElement, groupCards: Array<HTMLElement | null>) => {
+				for (const card of groupCards) {
+					if (card) grid.appendChild(card);
+				}
+			};
 
 			if (needsSections) {
 				// Render pinned section
 				if (pinnedFiles.length > 0) {
 					const pinnedGrid = fragment.createEl('div', { cls: 'mini-notes-grid-section' });
-					for (const file of pinnedFiles) {
-						const card = await this.createCard(file, globalIndex++);
-						if (card) pinnedGrid.appendChild(card);
-					}
+					appendCards(pinnedGrid, cards.slice(0, pinnedFiles.length));
 				}
 
 				// Separator line between sections
@@ -618,35 +863,30 @@ export class VisualDashboardView extends ItemView {
 				// Render all notes section
 				if (unpinnedFiles.length > 0) {
 					const notesGrid = fragment.createEl('div', { cls: 'mini-notes-grid-section' });
-					for (const file of unpinnedFiles) {
-						const card = await this.createCard(file, globalIndex++);
-						if (card) notesGrid.appendChild(card);
-					}
+					appendCards(notesGrid, cards.slice(pinnedFiles.length));
 				}
 			} else {
 				// Single section without header
 				const singleGrid = fragment.createEl('div', { cls: 'mini-notes-grid-section' });
-				for (const file of [...pinnedFiles, ...unpinnedFiles]) {
-					const card = await this.createCard(file, globalIndex++);
-					if (card) singleGrid.appendChild(card);
-				}
+				appendCards(singleGrid, cards);
 			}
 
 			const applyDOM = () => {
+				this.closeAllColorDropdowns();
 				this.miniNotesGrid.empty();
 				this.miniNotesGrid.appendChild(fragment);
+				this.replaceCardRenderComponent(nextRenderComponent);
+				nextRenderComponent = null;
+				commitRenderState(orderedFiles);
 				// Sections are only measurable once attached to the live DOM.
 				this.relayoutAllSections();
 			};
 
-			// @ts-ignore - Document View Transitions API
-			if (activeDocument.startViewTransition) {
-				// @ts-ignore
-				activeDocument.startViewTransition(() => applyDOM());
-			} else {
-				applyDOM();
-			}
+			// A direct swap avoids the old and new grids both being snapshotted in GPU memory.
+			applyDOM();
 		} catch (error) {
+			if (nextRenderComponent) this.removeChild(nextRenderComponent);
+			if (generation !== this.renderGeneration) return;
 			console.error('Error rendering cards:', error);
 			const errorMsg = this.miniNotesGrid.createDiv({ cls: 'dashboard-error' });
 			const errorText = errorMsg.createEl('p');
@@ -657,12 +897,30 @@ export class VisualDashboardView extends ItemView {
 			});
 			link.setAttribute('target', '_blank');
 			errorText.createSpan({ text: '.' });
+		} finally {
+			if (this.activeRenderGeneration === generation) this.activeRenderGeneration = null;
 		}
 	}
 
 	/**
+	 * Randomize the current display by moving existing card elements. This keeps
+	 * the action O(n) and avoids vault reads, Markdown rendering, and data writes.
+	 */
+	private shuffleDisplayedNotes() {
+		const pinnedFiles = this.currentFiles.filter(file => this.plugin.isPinned(file.path));
+		const unpinnedFiles = this.currentFiles.filter(file => !this.plugin.isPinned(file.path));
+
+		if (pinnedFiles.length < 2 && unpinnedFiles.length < 2) return;
+
+		shuffleInPlace(pinnedFiles);
+		shuffleInPlace(unpinnedFiles);
+		this.currentFiles = [...pinnedFiles, ...unpinnedFiles];
+		this.rebuildExistingCardGrid(pinnedFiles, unpinnedFiles);
+	}
+
+	/**
 	 * Move a card between the pinned/unpinned sections after a pin toggle without
-	 * re-reading files or re-rendering markdown for the whole grid — renderCards()
+	 * re-reading files or re-rendering markdown for the whole grid. renderCards()
 	 * does that for every card and made pin/unpin visibly slow.
 	 */
 	private repositionCardAfterPinToggle(file: TFile, card: HTMLElement) {
@@ -678,20 +936,28 @@ export class VisualDashboardView extends ItemView {
 		const pinnedFiles = this.currentFiles.filter(f => this.plugin.isPinned(f.path)).sort(sortByOrder);
 		const unpinnedFiles = this.currentFiles.filter(f => !this.plugin.isPinned(f.path)).sort(sortByOrder);
 		this.currentFiles = [...pinnedFiles, ...unpinnedFiles];
+		this.rebuildExistingCardGrid(pinnedFiles, unpinnedFiles, { file, card });
+	}
 
+	private rebuildExistingCardGrid(
+		pinnedFiles: TFile[],
+		unpinnedFiles: TFile[],
+		extraCard?: { file: TFile; card: HTMLElement }
+	) {
 		// Snapshot the already-rendered card elements so we can move them instead of recreating them.
 		const cardsByPath = new Map<string, HTMLElement>();
-		this.miniNotesGrid.querySelectorAll('.dashboard-card[data-path]').forEach(el => {
+		this.miniNotesGrid.querySelectorAll<HTMLElement>('.dashboard-card[data-path]').forEach(el => {
 			const path = el.getAttribute('data-path');
-			if (path) cardsByPath.set(path, el as HTMLElement);
+			if (path) cardsByPath.set(path, el);
 		});
-		cardsByPath.set(file.path, card);
+		if (extraCard) cardsByPath.set(extraCard.file.path, extraCard.card);
 
+		let globalIndex = 0;
 		const appendGroup = (grid: HTMLElement, groupFiles: TFile[]) => {
-			groupFiles.forEach((f, idx) => {
+			groupFiles.forEach(f => {
 				const el = cardsByPath.get(f.path);
 				if (el) {
-					el.setAttribute('data-index', idx.toString());
+					el.setAttribute('data-index', (globalIndex++).toString());
 					grid.appendChild(el);
 				}
 			});
@@ -713,25 +979,43 @@ export class VisualDashboardView extends ItemView {
 
 		this.miniNotesGrid.empty();
 		this.miniNotesGrid.appendChild(fragment);
+		// Card heights stay cached because the elements and column widths are unchanged.
 		this.relayoutAllSections();
 	}
 
-	async createCard(file: TFile, index: number): Promise<HTMLElement | null> {
+	private async openNoteOverlay(file: TFile) {
+		if (this.isClosing) return;
+		const generation = ++this.overlayGeneration;
+		if (this.activeOverlay) await this.activeOverlay.close();
+		if (this.isClosing || generation !== this.overlayGeneration) return;
+
+		let overlay: NoteEditorOverlay;
+		overlay = new NoteEditorOverlay(this.app, file, this.contentEl, () => {
+			if (this.activeOverlay === overlay) this.activeOverlay = null;
+		});
+		this.activeOverlay = overlay;
+		const opened = await overlay.open();
+		if (generation !== this.overlayGeneration) {
+			await overlay.close();
+			return;
+		}
+		if (!opened && this.activeOverlay === overlay) this.activeOverlay = null;
+	}
+
+	async createCard(
+		file: TFile,
+		index: number,
+		content: string,
+		tags: readonly string[],
+		renderComponent: Component
+	): Promise<HTMLElement | null> {
 		const card = activeDocument.createElement('div');
 		card.addClass('dashboard-card');
 		card.setAttribute('data-path', file.path);
 		card.setAttribute('data-index', index.toString());
 		card.setAttribute('draggable', 'true');
 
-		// Add isolated View Transition Name to smoothly animate layout bumps
-		const safeCssIdent = 'card-' + file.path.replace(/[^a-zA-Z0-9_-]/g, '-');
-		card.style.setProperty('view-transition-name', safeCssIdent);
-
 		try {
-			// Get content and preview
-			const content = await this.app.vault.cachedRead(file);
-			const tags = extractTags(content);
-
 			// Truncate raw content for preview (keep markdown formatting for proper rendering)
 			let previewText = this.plugin.data.showYamlFrontmatter
 				? content
@@ -807,7 +1091,9 @@ export class VisualDashboardView extends ItemView {
 			pinBtn.setAttribute('aria-label', isPinned ? 'Unpin note' : 'Pin note');
 			pinBtn.addEventListener('click', (e: MouseEvent) => {
 				e.stopPropagation();
-				void this.plugin.togglePin(file.path).then((nowPinned) => {
+				const toggleOperation = this.plugin.togglePin(file.path);
+				this.refreshIfRendering();
+				void toggleOperation.then((nowPinned) => {
 					pinBtn.classList.toggle('pinned', nowPinned);
 					card.classList.toggle('card-pinned', nowPinned);
 					this.repositionCardAfterPinToggle(file, card);
@@ -819,59 +1105,60 @@ export class VisualDashboardView extends ItemView {
 			setIcon(colorBtn, 'palette');
 			colorBtn.setAttribute('aria-label', 'Change note color');
 
-			// Create color palette dropdown using CSS variables
-			const pastelColors = [
-				...PASTEL_SWATCHES.map(swatch => swatch.value),
-				'var(--pastel-gray)'      // Gray (remove color)
-			];
+			// Build the palette only when it is opened. This avoids creating hundreds
+			// of hidden color controls and listeners during the initial render.
+			let colorDropdown: HTMLElement | null = null;
+			const getColorDropdown = () => {
+				if (colorDropdown) return colorDropdown;
+				colorDropdown = card.createDiv({ cls: 'card-color-dropdown' });
 
-			const colorDropdown = card.createDiv({ cls: 'card-color-dropdown' });
+				NOTE_COLOR_OPTIONS.forEach((color, index) => {
+					const colorCircle = colorDropdown!.createDiv({ cls: 'color-circle' });
+					const isClearOption = index === NOTE_COLOR_OPTIONS.length - 1;
 
-			pastelColors.forEach((color, index) => {
-				const colorCircle = colorDropdown.createDiv({ cls: 'color-circle' });
+					if (isClearOption) {
+						colorCircle.addClass('color-circle-clear');
+						colorCircle.setAttribute('aria-label', 'Remove color');
+					} else {
+						colorCircle.style.backgroundColor = color;
+						colorCircle.setAttribute('aria-label', 'Apply color');
+					}
 
-				// Last color is for removing
-				if (index === pastelColors.length - 1) {
-					colorCircle.addClass('color-circle-clear');
-					colorCircle.setAttribute('aria-label', 'Remove color');
-				} else {
-					colorCircle.style.backgroundColor = color;
-					colorCircle.setAttribute('aria-label', 'Apply color');
-				}
+					colorCircle.addEventListener('click', (e: MouseEvent) => {
+						e.stopPropagation();
 
-				colorCircle.addEventListener('click', (e: MouseEvent) => {
-					e.stopPropagation();
+						void (async () => {
+							if (isClearOption) {
+								card.style.removeProperty('background-color');
+								delete this.plugin.data.noteColors[file.path];
+							} else {
+								card.style.backgroundColor = color;
+								this.plugin.data.noteColors[file.path] = color;
+							}
 
-					void (async () => {
-						if (index === pastelColors.length - 1) {
-							// Remove color
-							card.style.removeProperty('background-color');
-							delete this.plugin.data.noteColors[file.path];
-						} else {
-							// Apply color using CSS variable
-							card.style.backgroundColor = color;
-							// Store the CSS variable name so it adapts to theme changes
-							this.plugin.data.noteColors[file.path] = color;
-						}
-
-						await this.plugin.savePluginData();
-						this.closeAllColorDropdowns();
-					})();
+							this.refreshIfRendering();
+							await this.plugin.savePluginData();
+							this.closeAllColorDropdowns();
+						})();
+					});
 				});
-			});
+
+				return colorDropdown;
+			};
 
 			// Toggle dropdown on click
 			colorBtn.addEventListener('click', (e: MouseEvent) => {
 				e.stopPropagation();
-				const shouldOpen = !colorDropdown.hasClass('show');
-				this.closeAllColorDropdowns(colorDropdown);
-				colorDropdown.toggleClass('show', shouldOpen);
-				this.activeColorDropdown = shouldOpen ? colorDropdown : null;
+				const dropdown = getColorDropdown();
+				const shouldOpen = !dropdown.hasClass('show');
+				this.closeAllColorDropdowns(dropdown);
+				dropdown.toggleClass('show', shouldOpen);
+				this.activeColorDropdown = shouldOpen ? dropdown : null;
 			});
 
 			// Close dropdown when clicking outside
 			card.addEventListener('click', () => {
-				if (this.activeColorDropdown === colorDropdown) {
+				if (colorDropdown && this.activeColorDropdown === colorDropdown) {
 					this.closeAllColorDropdowns();
 				}
 			});
@@ -896,7 +1183,7 @@ export class VisualDashboardView extends ItemView {
 					previewText,
 					previewContainer,
 					file.path,
-					this
+					renderComponent
 				);
 
 				// Mark direct child divs containing code blocks so CSS can skip
@@ -994,11 +1281,13 @@ export class VisualDashboardView extends ItemView {
 			// Left-click: open in a normal tab
 			card.addEventListener('click', (e: MouseEvent) => {
 				// Don't open if clicking action buttons, color dropdown, or during drag
+				if (this.isDragging || e.detail > 1) return;
 				if ((e.target as HTMLElement).closest('.card-pin-btn')) return;
 				if ((e.target as HTMLElement).closest('.card-color-btn')) return;
 				if ((e.target as HTMLElement).closest('.card-color-dropdown')) return;
-				const leaf = this.app.workspace.getLeaf('tab');
-				void leaf.openFile(file);
+				if ((e.target as HTMLElement).closest('a')) return;
+				const focus = !Keymap.isModEvent(e);
+				void openFileInNewTab(this.app, file, focus);
 			});
 
 			// Right-click: open inline overlay editor
@@ -1008,8 +1297,7 @@ export class VisualDashboardView extends ItemView {
 				if ((e.target as HTMLElement).closest('.card-color-btn')) return;
 				if ((e.target as HTMLElement).closest('.card-color-dropdown')) return;
 				e.preventDefault();
-				const overlay = new NoteEditorOverlay(this.app, file, this.contentEl);
-				void overlay.open();
+				void this.openNoteOverlay(file);
 			});
 
 			// Drag and drop handlers
@@ -1269,14 +1557,43 @@ export class VisualDashboardView extends ItemView {
 	}
 
 	async onClose() {
-
-		// Event cleanup handled automatically by registerEvent
-		this.resizeObserver?.disconnect();
-		this.resizeObserver = null;
+		// Invalidate async work before releasing the view's DOM and render resources.
+		this.isClosing = true;
+		this.renderGeneration++;
+		this.overlayGeneration++;
+		if (this.refreshTimeoutId !== null) {
+			window.clearTimeout(this.refreshTimeoutId);
+			this.refreshTimeoutId = null;
+		}
+		if (this.dragFrameId !== null) {
+			window.cancelAnimationFrame(this.dragFrameId);
+			this.dragFrameId = null;
+		}
 		if (this.relayoutFrameId !== null) {
 			window.cancelAnimationFrame(this.relayoutFrameId);
 			this.relayoutFrameId = null;
 		}
+
+		if (this.activeOverlay) await this.activeOverlay.close();
+		this.activeOverlay = null;
+		this.closeAllColorDropdowns();
+		this.replaceCardRenderComponent(null);
+		this.resizeObserver?.disconnect();
+		this.resizeObserver = null;
+		this.eventsRegistered = false;
+		this.checkboxToggleQueues.clear();
+		this.deletedNotesStack.length = 0;
+		this.currentFiles.length = 0;
+		this.tagCache.clear();
+		this.renderedDependencyPaths.clear();
+		this.currentSuggestions.length = 0;
+		this.allTags.length = 0;
+		this.allFolders.length = 0;
+		this.draggedCard = null;
+		this.dragOverTargetCard = null;
+		this.pendingDragTargetCard = null;
+		this.searchSuggestionsEl = null;
+		this.miniNotesGrid.empty();
 		this.contentEl.empty();
 	}
 }
